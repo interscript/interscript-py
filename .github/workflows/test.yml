@@ -2,36 +2,28 @@ name: PyTest
 
 on:
   push:
-    branches:
-      - main
-      - "*/ci-check"
+    branches: [main]
   pull_request: {}
 
 jobs:
   test:
-    name: PyTest
+    name: PyTest (${{ matrix.os }}, ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
-        python: [3.8, "3.10", 3.11, 3.12]
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12"]
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       with:
-        repository: interscript/interscript
-    - name: Run bootstrap script
-      run: ruby bootstrap.rb
-    - name: Use Ruby
-      uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: "3.2"
-    - name: Use Python
-      uses: actions/setup-python@v5
+        repository: interscript/maps
+        path: maps
+    - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python }}
-    - name: Compile maps
-      run: cd python; pip install regex pytest; bash ./build.sh; pip install .
-    - name: PyTest
-      run: cd python; pytest
+    - run: pip install -e ".[dev]"
+    - run: pytest tests/ -v
+      env:
+        INTERSCRIPT_MAPS_PATH: ${{ github.workspace }}/maps/maps

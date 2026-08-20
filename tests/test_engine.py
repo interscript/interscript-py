@@ -24,7 +24,10 @@ stage {
 }
 """
 
-MAPS = Path("/Users/mulgogi/src/interscript/interscript/maps/maps")
+MAPS = Path(__file__).parent.parent.parent / "maps" / "maps"
+import os
+if os.environ.get("INTERSCRIPT_MAPS_PATH"):
+    MAPS = Path(os.environ["INTERSCRIPT_MAPS_PATH"])
 
 
 def _load(name: str) -> Engine:
