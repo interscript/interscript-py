@@ -5,6 +5,7 @@ Public API (compatible with the pre-compiled module interface):
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .engine import Engine, ExecutionError
@@ -15,7 +16,11 @@ __all__ = [
     "Engine", "ExecutionError", "parse_file",
 ]
 
-_load_paths: list[Path] = []
+_load_paths: list[Path] = (
+    [Path(os.environ["INTERSCRIPT_MAPS_PATH"])]
+    if os.environ.get("INTERSCRIPT_MAPS_PATH")
+    else []
+)
 _cache: dict[str, Engine] = {}
 
 
