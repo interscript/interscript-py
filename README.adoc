@@ -2,72 +2,84 @@
 
 == Purpose
 
-This repository contains code for the Interscript Python runtime ("Interscript-Python").
+The official Python runtime for Interscript — deterministic transliteration
+over the interscript map corpus (300+ authority-backed systems: BGN/PCGN,
+ISO, UN, ALA-LC, ODNI, ICAO, DIN, and others).
 
-This software allows performing script conversions by using the
-https://github.com/interscript/maps[default set of Interscript maps]
-hosted at GitHub.
+This version (0.2.0) parses the `.imp` map DSL *directly* — no
+pre-compiled Python map modules or monorepo bootstrap required. Point
+it at the map corpus and go.
 
-Interscript is a project for interoperable script conversion systems
-and provides executable runtimes for multiple platforms.
-Full documentation available https://github.com/interscript/interscript/[here].
+Maps that need vocalized input (undiacritized Arabic, nikud-less Hebrew,
+unsegmented Thai) dispatch to a
+https://www.secryst.org[secryst crystal] through the optional phonological
+layer; see the phonological-layer documentation on
+https://www.interscript.org[our site].
 
-== Integration
-
-This section provides instructions on how to utilize Interscript-Python
-with your application.
-
-Interscript-Python can be used as a Python library
-
-=== Configuration
+== Install
 
 [source,shell]
 ----
-$ pip install interscript
+pip install interscript
 ----
 
 == Usage
 
-[source,javascript]
------
+[source,python]
+----
 import interscript
-interscript.load_map('bgnpcgn-ukr-Cyrl-Latn-2019')
-print(interscript.transliterate('bgnpcgn-ukr-Cyrl-Latn-2019', input()))
------
 
-== Development
+interscript.add_load_path(".../interscript/maps/maps")
+interscript.transliterate("un-bul-Cyrl-Latn-1977", "нос Бяга БЯГА")
+# -> "nos Byaga BYAGA"
+----
 
-Ensure you have used a bootstrap repository https://github.com/interscript/interscript
-and not just cloned this repo yourself, otherwise `./setup.sh` script won\'t work.
+== API
 
-`./setup.sh` script is used to build the maps from the `maps` repository using our Ruby
-Interscript implementation. Those maps are compiled to respective `.py` files inside
-`src/interscript/maps/` directory and are not included in this repository.
+- `add_load_path(path)` — register a directory containing `.imp`/`.isc` map files
+- `map_exist(name)` — check whether a map is available
+- `map_list()` — list all discoverable map names
+- `load_map(name)` — parse and cache a map (returns an `Engine`)
+- `transliterate(name, text)` — apply a map to text
 
-=== Running tests
+== Measured coverage (2026-08-20)
 
-[source,shell]
----
-$ pip install regex pytest
-$ ./build.sh
-$ pip install -e .
-$ pytest
----
+The engine passes maps' own embedded tests with the following scores;
+remaining gaps are documented in the test suite:
 
-=== Building package
+|===
+|map |embedded tests |gap
 
-[source,shell]
----
-$ pip install regex pytest
-$ ./build.sh
-$ python -m build
----
+|un-bul-Cyrl-Latn-1977
+|98/98
+|none
 
-=== Publishing package
+|un-ell-Grek-Latn-1987-ts
+|206/242
+|posix letter-class guards
 
-Edit pyproject.toml to contain a new version number, create a commit
-and add a git tag with that number.
+|bgnpcgn-prs-Arab-Latn-2007
+|loads, runs
+|proper-noun capitalization
+|===
 
-== Copyright and license
+== Architecture
 
-This is a Ribose project. Copyright Ribose.
+- `parser.py` — `.imp` DSL parser: metadata (incl. `|` block scalars), tests,
+  dependency declarations, stages, parallel groups, sub expressions
+- `expr.py` — expression layer: `any("…")` char classes, `any("a".."z")`
+  ranges, `any(["x","y"])` alternations, `maybe("…")`, `space`, `boundary`,
+  `line_start`/`line_end`, `+` concatenation, `before:`/`after:` context guards
+- `engine.py` — executor: parallel subs (longest-match-wins + word-aware
+  casing), `subst` regex, `run` (dependency-aliased dotted targets),
+  compose/decompose, downcase/upcase/titlecase
+
+== Sibling runtimes
+
+- Ruby: `gem install interscript` (https://rubygems.org/gems/interscript)
+- npm: `npm install interscript` (https://www.npmjs.com/package/interscript)
+- This: `pip install interscript`
+
+== License
+
+BSD-2-Clause. See link:LICENSE.adoc[LICENSE.adoc].
