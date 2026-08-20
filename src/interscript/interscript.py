@@ -1,36 +1,65 @@
-__all__ = ["map_exist", "map_list", "functions", "stdlib", "load_map", "transliterate"]
+"""Interscript Python runtime — direct .imp DSL parsing + execution.
 
-import importlib.util
-import os
+Public API (compatible with the pre-compiled module interface):
+    map_exist(name), map_list(), load_map(name), transliterate(name, text)
+"""
+from __future__ import annotations
 
-from . import functions as functions
-from . import stdlib as stdlib
+from pathlib import Path
 
-maps = stdlib.maps
+from .engine import Engine, ExecutionError
+from .parser import parse_file
 
-def map_exist(map):
-    return map in maps.keys()
+__all__ = [
+    "map_exist", "map_list", "load_map", "transliterate",
+    "Engine", "ExecutionError", "parse_file",
+]
 
-def map_list(map):
-    return maps.keys()
+_load_paths: list[Path] = []
+_cache: dict[str, Engine] = {}
 
-def load_map(map_name):
-    if map_exist(map_name):
-        return
 
-    # Construct the path to the map file based on the map_name argument
-    maps_dir = os.path.join(os.path.dirname(__file__), 'maps')
-    map_file_path = os.path.join(maps_dir, f"{map_name}.py")
+def add_load_path(path: str | Path) -> None:
+    _load_paths.append(Path(path))
 
-    # Check if the map file exists
-    if not os.path.exists(map_file_path):
-        raise FileNotFoundError(f"No map file found for {map_name}")
 
-    # Load the module
-    spec = importlib.util.spec_from_file_location(map_name, map_file_path)
-    map_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(map_module)
+def _find_map(map_name: str) -> Path | None:
+    for base in _load_paths:
+        for ext in (".imp", ".isc"):
+            candidate = base / f"{map_name}{ext}"
+            if candidate.is_file():
+                return candidate
+    return None
 
-def transliterate(map, str, stage="main"):
-    return maps[map]["stages"][stage](str)
 
+def map_exist(map_name: str) -> bool:
+    return _find_map(map_name) is not None
+
+
+def map_list() -> list[str]:
+    names = set()
+    for base in _load_paths:
+        if base.is_dir():
+            for f in base.iterdir():
+                if f.suffix in (".imp", ".isc"):
+                    names.add(f.stem)
+    return sorted(names)
+
+
+def load_map(map_name: str) -> Engine:
+    if map_name in _cache:
+        return _cache[map_name]
+    path = _find_map(map_name)
+    if path is None:
+        raise FileNotFoundError(
+            f"map {map_name!r} not found in load paths "
+            f"({', '.join(str(p) for p in _load_paths) or 'none configured'})"
+        )
+    tree = parse_file(path)
+    engine = Engine(tree, loader=load_map)
+    _cache[map_name] = engine
+    return engine
+
+
+def transliterate(map_name: str, text: str) -> str:
+    return load_map(map_name).transliterate(text)
