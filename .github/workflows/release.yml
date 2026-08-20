@@ -4,35 +4,20 @@ on:
   push:
     tags:
     - "v*"
+  workflow_dispatch:
 
 jobs:
-  test:
-    name: Release
+  release:
     runs-on: ubuntu-latest
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        repository: interscript/interscript
-    - name: Run bootstrap script
-      run: ruby bootstrap.rb
-    - name: Use Ruby
-      uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: "3.2"
-    - name: Use Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
-    - name: Compile maps
-      run: cd python; pip install build regex pytest twine; bash ./build.sh; pip install .
-    - name: PyTest
-      run: cd python; pytest
-    - name: Build package
-      run: cd python; python -m build
-    - name: Publish distribution to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        packages-dir: python/dist/
     permissions:
       id-token: write
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - run: pip install build pytest
+    - run: pip install -e .
+    - run: pytest tests/ -v
+    - run: python -m build
+    - uses: pypa/gh-action-pypi-publish@release/v1
