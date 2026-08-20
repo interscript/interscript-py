@@ -31,7 +31,7 @@ if os.environ.get("INTERSCRIPT_MAPS_PATH"):
 
 
 def _load(name: str) -> Engine:
-    interscript._load_paths.clear()
+    interscript.interscript._load_paths.clear()
     interscript.add_load_path(MAPS)
     return interscript.load_map(name)
 
