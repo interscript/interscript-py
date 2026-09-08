@@ -51,7 +51,7 @@ def map_list() -> list[str]:
     return sorted(names)
 
 
-def load_map(map_name: str) -> Engine:
+def load_map(map_name: str, on_unsupported: str = "raise") -> Engine:
     if map_name in _cache:
         return _cache[map_name]
     path = _find_map(map_name)
@@ -60,8 +60,14 @@ def load_map(map_name: str) -> Engine:
             f"map {map_name!r} not found in load paths "
             f"({', '.join(str(p) for p in _load_paths) or 'none configured'})"
         )
-    tree = parse_file(path)
-    engine = Engine(tree, loader=load_map)
+    if path.suffix == ".isc":
+        from .isc import parse_isc_file
+
+        tree = parse_isc_file(path, on_unsupported=on_unsupported)
+    else:
+        tree = parse_file(path)
+    engine = Engine(tree, loader=lambda name: load_map(name, on_unsupported=on_unsupported))
+    engine.skipped_unsupported.extend(tree.get("skipped_unsupported", []))
     _cache[map_name] = engine
     return engine
 

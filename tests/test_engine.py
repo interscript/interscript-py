@@ -30,10 +30,10 @@ if os.environ.get("INTERSCRIPT_MAPS_PATH"):
     MAPS = Path(os.environ["INTERSCRIPT_MAPS_PATH"])
 
 
-def _load(name: str) -> Engine:
+def _load(name: str, on_unsupported: str = "raise") -> Engine:
     interscript.interscript._load_paths.clear()
     interscript.add_load_path(MAPS)
-    return interscript.load_map(name)
+    return interscript.load_map(name, on_unsupported=on_unsupported)
 
 
 def test_parse_metadata_and_tests():
@@ -85,8 +85,7 @@ def test_real_greek_map_dependency_runs():
     """Dependency-aliased dotted runs resolve; measured 206/242 embedded
     tests (2026-08-20). Remaining failures: letter-class context guards
     from the posix aliases."""
-    engine = _load("un-ell-Grek-Latn-1987-ts")
-    engine.on_unsupported = "skip"
+    engine = _load("un-ell-Grek-Latn-1987-ts", on_unsupported="skip")
     cases = engine.tree["tests"]
     passed = sum(1 for src, want in cases if engine.transliterate(src) == want)
     assert passed >= 200, f"regression: {passed}/{len(cases)}"
