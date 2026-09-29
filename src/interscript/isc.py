@@ -807,7 +807,7 @@ def _stage_tree(
         if dep:
             target = dep_aliases.get(dep, dep)
             return {"kind": "run", "map": target}
-        raise UnsupportedConstruct("same-map stage run (run stage.X)")
+        return {"kind": "run_stage", "name": body_item["stage"]}
     if kind in ("compose", "decompose"):
         return {"kind": kind}
     if kind == "string_case":
@@ -877,10 +877,21 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
     }
 
     def _subst(rule: dict) -> dict:
+        pattern = _guarded_regex(rule, regex_aliases)
+        to = rule["to"]
+        if to.get("type") == "function" and to.get("name") in _FUNCTIONS:
+            # `to upcase` and friends: the replacement is the match
+            # itself, passed through the casing function.
+            return {
+                "kind": "subst",
+                "pattern": pattern,
+                "result": "",
+                "case": to["name"],
+            }
         return {
             "kind": "subst",
-            "pattern": _guarded_regex(rule, regex_aliases),
-            "result": _repl_of(rule["to"], regex_aliases),
+            "pattern": pattern,
+            "result": _repl_of(to, regex_aliases),
         }
 
     def _maybe(rule: dict, rules: list[dict]) -> None:
@@ -895,12 +906,20 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
         except UnsupportedConstruct as e:
             skipped.append(str(e))
 
-    # The engine consumes a flat, ordered rule list; ISC stage names do
-    # not survive conversion (same-map named runs are unsupported anyway).
-    stages: list[dict] = []
-    for stage in doc["stages"]:
+    # The engine consumes a flat, ordered rule list. Same-map named
+    # runs (run stage.X) are inlined at conversion time, so each
+    # converted stage is self-contained.
+    stages_by_name = {stage["name"]: stage for stage in doc["stages"]}
+    converted: dict[str, list[dict]] = {}
+
+    def convert_stage(name: str, visiting: set[str]) -> list[dict]:
+        if name in converted:
+            return converted[name]
+        if name in visiting:
+            raise UnsupportedConstruct(f"cyclic run stage.{name}")
+        visiting.add(name)
         rules: list[dict] = []
-        for body_item in stage["body"]:
+        for body_item in stages_by_name[name]["body"]:
             kind = body_item["kind"]
             if kind == "sequence":
                 for rule in body_item["rules"]:
@@ -910,19 +929,46 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
                 _maybe(lambda rule=rule: _subst(rule), rules)
             else:
                 try:
-                    _maybe(
-                        lambda body_item=body_item: _stage_item(
-                            body_item, dep_aliases, aliases
-                        ),
-                        rules,
-                    )
+                    op = _stage_item(body_item, dep_aliases, aliases)
                 except _SplitParallel as split:
                     # Capture-bearing parallel rules degrade to ordered
                     # substitutions ahead of the capture-free parallel op.
                     for rule in split.capture_rules:
                         _maybe(lambda rule=rule: _subst(rule), rules)
                     rules.append({"kind": "parallel", "subs": split.subs})
-        stages.append({"children": rules})
+                    continue
+                if op is None:
+                    continue
+                if op.get("kind") == "run_stage":
+                    if op["name"] in stages_by_name:
+                        rules.extend(convert_stage(op["name"], visiting))
+                    else:
+                        # A stage from an imported map (alias-less
+                        # dependency): run the whole imported map —
+                        # import semantics merge its stages into scope.
+                        target = next(
+                            (
+                                d["target"]
+                                for d in doc["dependencies"]
+                                if not d.get("aliasName")
+                            ),
+                            None,
+                        )
+                        if target is None:
+                            raise UnsupportedConstruct(
+                                f"unresolved stage run stage.{op['name']}"
+                            )
+                        rules.append({"kind": "run", "map": target})
+                else:
+                    rules.append(op)
+        visiting.discard(name)
+        converted[name] = rules
+        return rules
+
+    stages = [
+        {"name": name, "children": convert_stage(name, set())}
+        for name in stages_by_name
+    ]
 
     return {
         "metadata": doc["metadata"],

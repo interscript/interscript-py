@@ -129,3 +129,51 @@ def test_skip_mode_records_and_drops():
     )
     assert tree2["skipped_unsupported"]
     assert tree2["stages"][0]["children"] == []
+
+
+def test_to_position_case_function():
+    src = 'system "x" { stage main { sub { from "b" to upcase } } }'
+    tree = isc_to_tree(src)
+    subst = tree["stages"][0]["children"][0]
+    assert subst["kind"] == "subst"
+    assert subst["case"] == "upcase"
+
+
+def test_same_map_stage_runs_inline():
+    src = """
+    system "x" {
+      stage one { sub "0" "1" }
+      stage two { sub "1" "2" }
+      stage main {
+        run stage.one
+        run stage.two
+      }
+    }
+    """
+    tree = isc_to_tree(src)
+    main = next(s for s in tree["stages"] if s["name"] == "main")
+    # Inlined in run order: both referenced stages' rules, self-contained.
+    assert [c["result"] for c in main["children"]] == ["1", "2"]
+
+
+def test_cyclic_stage_run_raises():
+    src = """
+    system "x" {
+      stage a { run stage.b }
+      stage b { run stage.a }
+      stage main { run stage.a }
+    }
+    """
+    with pytest.raises(UnsupportedConstruct, match="cyclic"):
+        isc_to_tree(src)
+
+
+def test_imported_stage_run_resolves_to_dependency():
+    src = """
+    system "x" {
+      dependency "imp"
+      stage main { run stage.hello }
+    }
+    """
+    tree = isc_to_tree(src)
+    assert tree["stages"][0]["children"][0] == {"kind": "run", "map": "imp"}

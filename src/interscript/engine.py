@@ -62,6 +62,16 @@ def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str]
     return pattern, {"casing": casing_map, "upper": upper_dst, "results": results}, {}
 
 
+_CASE_FNS = {
+    "upcase": str.upper,
+    "downcase": str.lower,
+    "title_case": str.title,
+    "swapcase": str.swapcase,
+    "strip": str.strip,
+    "reverse": lambda s: s[::-1],
+}
+
+
 class Engine:
     def __init__(self, tree: dict, loader=None, on_unsupported: str = "raise") -> None:
         self.tree = tree
@@ -132,6 +142,10 @@ class Engine:
         if kind == "subst":
             flags = re.IGNORECASE if op.get("ignore_case") else 0
             pattern = re.compile(op["pattern"], flags)
+            case = op.get("case")
+            if case:
+                fn = _CASE_FNS[case]
+                return pattern.sub(lambda m: fn(m.group(0)), text)
             result = re.sub(r"\$(\d)", r"\\\1", op["result"])
             return pattern.sub(result, text)
         if kind == "run":
