@@ -318,7 +318,15 @@ class _IscParser:
                 body.append({"kind": "funcall", "name": "rababa", "kwargs": kwargs})
             elif keyword in _FUNCTIONS:
                 self._consume(keyword)
-                body.append({"kind": "string_case", "op": keyword})
+                item = {"kind": "string_case", "op": keyword}
+                self._skip_inline_ws()
+                if keyword == "title_case" and self._peek_word() == "word_separator":
+                    self._consume("word_separator")
+                    self._skip_ws()
+                    self._expect(":")
+                    self._skip_ws()
+                    item["word_separator"] = self._item_atom()["value"]
+                body.append(item)
             elif keyword == "sub":
                 body.append({"kind": "bare_rule", "rule": self._rule()})
             else:
@@ -811,7 +819,16 @@ def _stage_tree(
     if kind in ("compose", "decompose"):
         return {"kind": kind}
     if kind == "string_case":
-        return {"kind": body_item["op"]}
+        op = {"kind": body_item["op"]}
+        if "word_separator" in body_item:
+            op["word_separator"] = body_item["word_separator"]
+        return op
+    if kind == "separate":
+        sep = {"kind": "separate"}
+        separator = body_item.get("separator")
+        if separator and separator.get("type") == "string":
+            sep["separator"] = separator["value"]
+        return sep
     raise UnsupportedConstruct(f"stage item {kind}")
 
 

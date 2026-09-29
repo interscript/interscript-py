@@ -177,3 +177,18 @@ def test_imported_stage_run_resolves_to_dependency():
     """
     tree = isc_to_tree(src)
     assert tree["stages"][0]["children"][0] == {"kind": "run", "map": "imp"}
+
+
+def test_separate_stage_op():
+    src = 'system "x" { stage main { separate separator "|" } }'
+    tree = isc_to_tree(src)
+    assert tree["stages"][0]["children"][0] == {"kind": "separate", "separator": "|"}
+
+
+def test_title_case_word_separator():
+    src = 'system "x" { stage main { title_case word_separator: "" } }'
+    tree = isc_to_tree(src)
+    assert tree["stages"][0]["children"][0] == {
+        "kind": "title_case",
+        "word_separator": "",
+    }

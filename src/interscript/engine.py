@@ -164,6 +164,25 @@ class Engine:
             if self._loader is None:
                 raise ExecutionError(f"run {op['map']!r}: no map loader configured")
             return self._loader(target).transliterate(text)
+        if kind == "separate":
+            separator = op.get("separator", " ")
+            return separator.join(text)
+        if kind == "title_case":
+            # Ruby parity: upcase the first character of every line and
+            # of every segment following the word separator.
+            sep = op.get("word_separator", " ")
+            out = "\n".join(
+                line[:1].upper() + line[1:] for line in text.split("\n")
+            )
+            if sep != "":
+                out = re.sub(
+                    re.escape(sep) + "(.)",
+                    lambda m: m.group(1).upper(),
+                    out,
+                )
+            return out
+        if kind == "titlecase":
+            return text.title()
         if kind == "downcase":
             return text.lower()
         if kind == "upcase":
