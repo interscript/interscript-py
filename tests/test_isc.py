@@ -211,3 +211,59 @@ def test_any_in_result_none_first():
     src = 'system "x" { stage main { sub "a" any([none, " "]) } }'
     tree = isc_to_tree(src)
     assert tree["stages"][0]["children"][0]["result"] == ""
+
+
+
+
+
+
+
+
+def _write_dep_fixture():
+    import tempfile, os
+
+    from interscript import add_load_path
+
+    d = tempfile.mkdtemp()
+    open(os.path.join(d, "dep-map.isc"), "w").write(
+        'system "dep-map" {\n'
+        "  aliases {\n"
+        '    from_name = "404"\n'
+        '    to_name = "500"\n'
+        "  }\n"
+        "}\n"
+    )
+    add_load_path(d)
+    return d
+
+
+def test_qualified_alias_resolves_from_dependency():
+    _write_dep_fixture()
+    src = """
+    system "x" {
+      dependency "dep-map" as remo
+      stage main {
+        sub remo.from_name remo.to_name
+      }
+    }
+    """
+    tree = isc_to_tree(src)
+    subst = tree["stages"][0]["children"][0]
+    assert subst["pattern"] == "404"
+    assert subst["result"] == "500"
+
+
+def test_imported_alias_resolves():
+    _write_dep_fixture()
+    src = """
+    system "x" {
+      dependency "dep-map"
+      stage main {
+        sub from_name to_name
+      }
+    }
+    """
+    tree = isc_to_tree(src)
+    subst = tree["stages"][0]["children"][0]
+    assert subst["pattern"] == "404"
+    assert subst["result"] == "500"

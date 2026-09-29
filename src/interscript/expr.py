@@ -19,6 +19,8 @@ _TOKEN = re.compile(
     r'|maybe\(\s*"(?P<opt>(?:[^"\\]|\\.)*)"\s*\)'
     r'|any\(\s*\[(?P<lst>(?:[^\\\[\]]|\\.)*)\]\s*\)'
     r"|(?P<space>\bspace\b)|(?P<boundary>\bboundary\b)"
+    r"|(?P<nwb>\bnon_word_boundary\b)"
+    r'|capture\(\s*(?P<grp>(?:[^()\\]|\\.|\([^()]*\))*)\s*\)' 
     r"|(?P<line_end>\bline_end\b)|(?P<line_start>\bline_start\b)"
     r"|(?P<cat>\+)"
 )
@@ -57,6 +59,10 @@ def _scan(expr: str, want: str):
             out.append(("space", " "))
         elif g["boundary"] is not None:
             out.append(("boundary", ""))
+        elif g["nwb"] is not None:
+            out.append(("nwb", ""))
+        elif g["grp"] is not None:
+            out.append(("grp", g["grp"]))
         elif g["line_end"] is not None:
             out.append(("anchor", "$"))
         elif g["line_start"] is not None:
@@ -90,6 +96,10 @@ def expr_to_regex(expr: str) -> str:
             parts.append(SPACE)
         elif kind == "boundary":
             parts.append(r"\b")
+        elif kind == "nwb":
+            parts.append(r"\B")
+        elif kind == "grp":
+            parts.append("(" + expr_to_regex(value) + ")")
         elif kind == "anchor":
             parts.append(value)
     return "".join(parts)
