@@ -176,7 +176,7 @@ class Engine:
             )
             if sep != "":
                 out = re.sub(
-                    re.escape(sep) + "(.)",
+                    f"(?<={re.escape(sep)})(.)",
                     lambda m: m.group(1).upper(),
                     out,
                 )

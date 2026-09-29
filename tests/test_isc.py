@@ -192,3 +192,22 @@ def test_title_case_word_separator():
         "kind": "title_case",
         "word_separator": "",
     }
+
+
+def test_any_in_result_picks_first_alternative():
+    src = 'system "x" { stage main { sub any("ab") any(["XA", "YB"]) } }'
+    tree = isc_to_tree(src)
+    subst = tree["stages"][0]["children"][0]
+    assert subst["result"] == "XA"
+
+
+def test_any_in_result_nested_first():
+    src = 'system "x" { stage main { sub "a" any([any("XY"), "Z"]) } }'
+    tree = isc_to_tree(src)
+    assert tree["stages"][0]["children"][0]["result"] == "X"
+
+
+def test_any_in_result_none_first():
+    src = 'system "x" { stage main { sub "a" any([none, " "]) } }'
+    tree = isc_to_tree(src)
+    assert tree["stages"][0]["children"][0]["result"] == ""
