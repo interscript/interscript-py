@@ -89,3 +89,29 @@ def test_real_greek_map_dependency_runs():
     cases = engine.tree["tests"]
     passed = sum(1 for src, want in cases if engine.transliterate(src) == want)
     assert passed >= 200, f"regression: {passed}/{len(cases)}"
+
+
+def test_engine_separate_and_title_case():
+    import tempfile, os, sys
+    from interscript import add_load_path, transliterate
+
+    d = tempfile.mkdtemp()
+    open(os.path.join(d, "ops.isc"), "w").write(
+        'system "ops" {\n'
+        '  stage main {\n'
+        "    separate separator \"|\"\n"
+        "  }\n"
+        "}\n"
+    )
+    add_load_path(d)
+    assert transliterate("ops", "こんいちは") == "こ|ん|い|ち|は"
+
+    open(os.path.join(d, "tc.isc"), "w").write(
+        'system "tc" {\n'
+        '  stage main {\n'
+        "    title_case word_separator: \"\"\n"
+        "  }\n"
+        "}\n"
+    )
+    assert transliterate("tc", "hello world") == "Hello world"
+    assert transliterate("tc", "hello world\nhello hello") == "Hello world\nHello hello"
