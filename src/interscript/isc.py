@@ -50,7 +50,7 @@ class _SplitParallel(Exception):
         self.capture_rules = capture_rules
 
 
-PRIMITIVES = {"boundary", "line_start", "line_end", "word_boundary", "non_boundary", "space"}
+PRIMITIVES = {"boundary", "line_start", "line_end", "word_boundary", "non_word_boundary", "space"}
 _FUNCTIONS = {"upcase", "downcase", "title_case", "reverse", "strip", "swapcase"}
 _CONSTRAINTS = {"before", "after", "not_before", "not_after"}
 # Tokens that terminate an item inside a rule; a bare word equal to one
@@ -487,6 +487,11 @@ class _IscParser:
             self._consume(word)
             return {"type": "function", "name": word}
         self._consume(word)
+        if self._src.startswith(".", self._pos):
+            self._pos += 1
+            self._skip_inline_ws()
+            name = self._identifier()
+            return {"type": "alias_ref", "name": name, "map": word}
         return {"type": "alias_ref", "name": word}
 
     def _dependency(self) -> dict:
@@ -662,6 +667,8 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
         return "any([" + ", ".join(_render_item(sub, aliases) for sub in items) + "])"
     if kind == "range":
         return f'any("{_escape(item["lo"])}".."{_escape(item["hi"])}")'
+    if kind == "capture_group":
+        return "capture(" + _render_item(item["inner"], aliases) + ")"
     if kind == "maybe":
         inner = item["inner"]
         if inner["type"] != "string":
@@ -673,6 +680,8 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
             return "space"
         if name == "boundary":
             return "boundary"
+        if name == "non_word_boundary":
+            return "non_word_boundary"
         if name == "line_start":
             return "line_start"
         if name == "line_end":
@@ -680,6 +689,10 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
         raise UnsupportedConstruct(f"primitive {name}")
     if kind == "alias_ref":
         name = item["name"]
+        if item.get("map"):
+            return _qualified_expr(item["map"], name)
+        if name in _imported:
+            return _qualified_expr(None, name)
         if name not in aliases:
             raise UnsupportedConstruct(f"unresolved alias {name}")
         return aliases[name]
@@ -714,7 +727,9 @@ def _regex_of(item: dict, aliases: dict[str, str]) -> str:
         return "".join(_regex_of(part, aliases) for part in item["parts"])
     if kind == "set":
         items = item["items"]
-        if all(sub["type"] == "string" for sub in items):
+        if all(sub["type"] == "string" for sub in items) and all(
+            len(sub["value"]) == 1 for sub in items
+        ):
             return "[" + re.escape("".join(sub["value"] for sub in items)) + "]"
         return "(?:" + "|".join(_regex_of(sub, aliases) for sub in items) + ")"
     if kind == "range":
@@ -723,15 +738,23 @@ def _regex_of(item: dict, aliases: dict[str, str]) -> str:
         return "(?:" + _regex_of(item["inner"], aliases) + ")?"
     if kind == "capture_group":
         return "(" + _regex_of(item["inner"], aliases) + ")"
+    if kind == "capture":
+        # ref(N) in a from position is a backreference.
+        return f"\\{item['index']}"
     if kind == "primitive":
         return {
             "boundary": r"\b",
+            "non_word_boundary": r"\B",
             "line_start": "^",
             "line_end": "$",
             "space": " ",
         }.get(item["name"], None) or _unsupported_primitive(item["name"])
     if kind == "alias_ref":
         name = item["name"]
+        if item.get("map"):
+            return _qualified_regex(item["map"], name)
+        if name in _imported:
+            return _qualified_regex(None, name)
         if name not in aliases:
             raise UnsupportedConstruct(f"unresolved alias {name}")
         return aliases[name]
@@ -761,6 +784,10 @@ def _repl_of(item: dict, aliases: dict[str, str]) -> str:
         return _repl_of(item["items"][0], aliases)
     if kind == "alias_ref":
         name = item["name"]
+        if item.get("map"):
+            return _qualified_repl(item["map"], name)
+        if name in _imported:
+            return _qualified_repl(None, name)
         if name not in aliases:
             raise UnsupportedConstruct(f"unresolved alias {name}")
         raise UnsupportedConstruct("alias in a result")
@@ -842,6 +869,65 @@ def _stage_tree(
 
 _LIB_CACHE: dict[str, dict[str, str]] = {}
 
+# Dep-alias context of the document being converted, and a memoized
+# {target: {alias-name: item}} table for qualified alias resolution
+# (map.<dep-alias>.<name>). Single-threaded conversion; reset per doc.
+_dep_aliases: dict[str, str] = {}
+_DEP_ALIAS_ITEMS: dict[str, dict] = {}
+_imported: dict[str, str] = {}
+
+
+def _is_library_target(target: str) -> bool:
+    # Libraries carry no path separators or dots (same heuristic as the
+    # library-alias harvester) and resolve through _library_aliases.
+    return "/" not in target and "." not in target
+
+
+def _dep_items(target: str) -> dict:
+    """Parse a dependency map's source and return its alias items,
+    memoized per target."""
+    if target in _DEP_ALIAS_ITEMS:
+        return _DEP_ALIAS_ITEMS[target]
+    from .interscript import _find_map
+
+    path = _find_map(target)
+    if path is None:
+        raise UnsupportedConstruct(f"dependency map {target!r} not found")
+    doc = _IscParser(Path(path).read_text(encoding="utf-8"), str(path)).parse()
+    items = {a["name"]: a["value"] for a in doc["aliases"]}
+    _DEP_ALIAS_ITEMS[target] = items
+    return items
+
+
+def _qualified_items(map_alias: str, name: str) -> tuple[dict, dict]:
+    target = _dep_aliases.get(map_alias) or _imported.get(name) or _dep_aliases.get(name)
+    if target is None:
+        raise UnsupportedConstruct(f"unresolved alias {name}")
+    return _qualified_items_for(target, name)
+
+
+def _qualified_items_for(target: str, name: str) -> tuple[dict, dict]:
+    _dep_aliases = target
+    items = _dep_items(target)
+    if name not in items:
+        raise UnsupportedConstruct(f"unresolved alias {target}.{name}")
+    return items[name], items
+
+
+def _qualified_expr(map_alias: str, name: str) -> str:
+    item, items = _qualified_items(map_alias, name)
+    return _render_item(item, {k: _render_item(v, items) for k, v in items.items()})
+
+
+def _qualified_regex(map_alias: str, name: str) -> str:
+    item, _ = _qualified_items(map_alias, name)
+    return expr_to_regex(_qualified_expr(map_alias, name))
+
+
+def _qualified_repl(map_alias: str, name: str) -> str:
+    item, _ = _qualified_items(map_alias, name)
+    return _repl_of(item, {})
+
 
 def _library_aliases(name: str, libs_dir: Path) -> dict[str, str]:
     """Harvest `def_alias NAME, expr` lines from an .iml library.
@@ -900,6 +986,24 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
     dep_aliases = {
         d["aliasName"]: d["target"] for d in doc["dependencies"] if d.get("aliasName")
     }
+
+    _dep_aliases.clear()
+    _DEP_ALIAS_ITEMS.clear()
+    _imported.clear()
+    _dep_aliases.update(dep_aliases)
+
+    # Alias-less (import) dependencies merge their aliases into scope.
+    # A target that resolves to a map file is parsed; legacy libraries
+    # were already harvested into library_aliases above.
+    for d in doc["dependencies"]:
+        if d.get("aliasName"):
+            continue
+        from .interscript import _find_map
+
+        if _find_map(d["target"]) is not None:
+            items = _dep_items(d["target"])
+            for name in items:
+                _imported.setdefault(name, d["target"])
 
     def _subst(rule: dict) -> dict:
         pattern = _guarded_regex(rule, regex_aliases)
