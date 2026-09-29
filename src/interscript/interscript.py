@@ -12,7 +12,7 @@ from .engine import Engine, ExecutionError
 from .parser import parse_file
 
 __all__ = [
-    "map_exist", "map_list", "load_map", "transliterate",
+    "map_exist", "map_list", "load_map", "unload_map", "transliterate",
     "Engine", "ExecutionError", "parse_file",
 ]
 
@@ -49,6 +49,13 @@ def map_list() -> list[str]:
                 if f.suffix in (".imp", ".isc"):
                     names.add(f.stem)
     return sorted(names)
+
+
+def unload_map(map_name: str) -> None:
+    """Drop a cached engine. Callers that regenerate a map under the
+    same name (the Ruby bridge's synthetic documents) must evict the
+    stale engine."""
+    _cache.pop(map_name, None)
 
 
 def load_map(map_name: str, on_unsupported: str = "raise") -> Engine:
