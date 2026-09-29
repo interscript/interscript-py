@@ -655,7 +655,9 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
         return " + ".join(_render_item(part, aliases) for part in item["parts"])
     if kind == "set":
         items = item["items"]
-        if all(sub["type"] == "string" for sub in items):
+        if all(sub["type"] == "string" for sub in items) and all(
+            len(sub["value"]) == 1 for sub in items
+        ):
             return f'any("{_escape("".join(sub["value"] for sub in items))}")'
         return "any([" + ", ".join(_render_item(sub, aliases) for sub in items) + "])"
     if kind == "range":
@@ -751,6 +753,12 @@ def _repl_of(item: dict, aliases: dict[str, str]) -> str:
         return "".join(_repl_of(part, aliases) for part in item["parts"])
     if kind == "capture":
         return f"${item['index']}"
+    if kind == "set":
+        # A to-position any() lists alternative spellings; the Ruby
+        # runtime picks the first in non-iterating mode.
+        if not item["items"]:
+            return ""
+        return _repl_of(item["items"][0], aliases)
     if kind == "alias_ref":
         name = item["name"]
         if name not in aliases:
