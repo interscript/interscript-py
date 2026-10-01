@@ -212,3 +212,59 @@ def test_any_list_alternatives_are_full_expressions():
     # no boundary before "ab" -> the alternative declines, bare b fires.
     assert e.transliterate("xab") == "xaY"
     assert e.transliterate("cab") == "caY"
+
+
+def test_before_guard_over_alternation_of_anchor_and_literal():
+    """odni-kor: before any([line_start, " "]) — a positive lookbehind
+    over alternatives of DIFFERENT widths (0 and 1). Python re requires
+    fixed-width lookbehinds; Ruby's Onigmo does not, so the branches are
+    distributed: (?<=A|B) == (?:(?<=A)|(?<=B))."""
+    import tempfile, os
+    from interscript import add_load_path, transliterate
+
+    d = tempfile.mkdtemp()
+    open(os.path.join(d, "lb.isc"), "w").write(
+        "system \"lb\" {\n"
+        "  stage main {\n"
+        "    parallel {\n"
+        "      sub {\n"
+        "        from \"x\"\n"
+        "        to \"X\"\n"
+        "        before any([line_start, \" \"])\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    add_load_path(d)
+    assert transliterate("lb", "x") == "X"
+    assert transliterate("lb", "a x") == "a X"
+    assert transliterate("lb", "ax") == "ax"
+
+
+def test_maybe_accepts_full_expressions():
+    """alalc-aze / odni-pus: from maybe(any("ab")) + "c" — maybe over a
+    character class, which the renderer rejected as non-string."""
+    import tempfile, os
+    from interscript import add_load_path, transliterate
+
+    d = tempfile.mkdtemp()
+    open(os.path.join(d, "mb.isc"), "w").write(
+        "system \"mb\" {\n"
+        "  stage main {\n"
+        "    parallel {\n"
+        "      sub {\n"
+        "        from maybe(any(\"ab\")) + \"c\"\n"
+        "        to \"Q\"\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    add_load_path(d)
+    assert transliterate("mb", "c") == "Q"
+    assert transliterate("mb", "ac") == "Q"
+    assert transliterate("mb", "bc") == "Q"
+    # empty maybe + "c" still matches the bare c (Ruby parallel
+    # semantics: the rule consumes just "c" here).
+    assert transliterate("mb", "dc") == "dQ"

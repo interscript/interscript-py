@@ -16,7 +16,6 @@ _TOKEN = re.compile(
     r'"(?P<lit>(?:[^"\\]|\\.)*)"'
     r'|any\(\s*"(?P<rlo>(?:[^"\\]|\\.)*)"\s*\.\.\s*"(?P<rhi>(?:[^"\\]|\\.)*)"\s*\)'
     r'|any\(\s*"(?P<cls>(?:[^"\\]|\\.)*)"\s*\)'
-    r'|maybe\(\s*"(?P<opt>(?:[^"\\]|\\.)*)"\s*\)'
     r"|(?P<space>\bspace\b)|(?P<boundary>\bboundary\b)"
     r"|(?P<nwb>\bnon_word_boundary\b)"
     r'|capture\(\s*(?P<grp>(?:[^()\\]|\\.|\([^()]*\))*)\s*\)' 
@@ -94,6 +93,32 @@ def _unesc(s: str) -> str:
 
 
 _ANY_LIST = re.compile(r"any\(\s*\[")
+_MAYBE = re.compile(r"maybe\(\s*")
+
+
+def _read_parenthesized(expr: str, pos: int) -> tuple[str, int]:
+    """With pos at '(': return the inner content and the position after
+    the matching ')' (quote-, bracket- and depth-aware)."""
+    depth, i, n = 0, pos, len(expr)
+    while i < n:
+        c = expr[i]
+        if c == '"':
+            i += 1
+            while i < n:
+                if expr[i] == "\\":
+                    i += 2
+                    continue
+                if expr[i] == '"':
+                    break
+                i += 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return expr[pos + 1 : i], i + 1
+        i += 1
+    raise ValueError(f"unterminated parenthesis in {expr!r}")
 
 
 def _scan(expr: str, want: str):
@@ -103,6 +128,11 @@ def _scan(expr: str, want: str):
     while pos < len(expr):
         if expr[pos].isspace():
             pos += 1
+            continue
+        if _MAYBE.match(expr, pos):
+            paren = expr.find("(", pos)
+            inner, pos = _read_parenthesized(expr, paren)
+            out.append(("opt", inner))
             continue
         if _ANY_LIST.match(expr, pos):
             bracket = expr.find("[", pos)
@@ -125,8 +155,6 @@ def _scan(expr: str, want: str):
             out.append(("range", _unesc(g["rlo"]) + "\x00" + _unesc(g["rhi"])))
         elif g["cls"] is not None:
             out.append(("cls", _unesc(g["cls"])))
-        elif g["opt"] is not None:
-            out.append(("opt", _unesc(g["opt"])))
         elif g["space"] is not None:
             out.append(("space", " "))
         elif g["boundary"] is not None:
@@ -149,16 +177,50 @@ def _scan(expr: str, want: str):
     return out
 
 
+def _lb_branches(expr: str) -> list[str]:
+    """Expand an expression into fixed-width regex branches by cross
+    product over alternations and optionals. Python re requires
+    fixed-width lookbehinds where Ruby's Onigmo does not, so guards
+    distribute over their branches instead."""
+    branches = [""]
+    for kind, value in _scan(expr, "lookbehind"):
+        if kind == "cat":
+            continue
+        if kind == "alt":
+            expanded = [b for a in value.split("\x00") for b in _lb_branches(a)]
+        elif kind == "opt":
+            expanded = _lb_branches(value) + [""]
+        elif kind == "grp":
+            expanded = ["(" + expr_to_regex(value) + ")"]
+        elif kind == "lit":
+            expanded = [re.escape(value)]
+        elif kind == "cls":
+            expanded = ["[" + re.escape(value) + "]"]
+        elif kind == "range":
+            lo, hi = value.split("\x00")
+            expanded = ["[" + re.escape(lo) + "-" + re.escape(hi) + "]"]
+        elif kind == "space":
+            expanded = [SPACE]
+        else:
+            expanded = [{"boundary": _BOUNDARY, "nwb": r"\B", "anchor": value}[kind]]
+        branches = [b + x for b in branches for x in expanded]
+    return branches
+
+
+def expr_lookbehind(expr: str) -> str:
+    raw = _lb_branches(expr)
+    if any(b == "" for b in raw):
+        return ""  # a zero-width branch always matches: no assertion
+    if len(raw) == 1:
+        return f"(?<={raw[0]})"
+    return "(?:" + "|".join(f"(?<={b})" for b in raw) + ")"
+
+
 def expr_neg_lookbehind(expr: str) -> str:
-    """Negative lookbehind over an expression. Python re requires
-    fixed-width lookbehinds (Ruby's Onigmo does not), so a top-level
-    alternation is distributed: (?<!A|B) == (?<!A)(?<!B)."""
-    toks = _scan(expr, "expression")
-    if len(toks) == 1 and toks[0][0] == "alt":
-        parts = [expr_to_regex(a) for a in toks[0][1].split("\x00")]
-    else:
-        parts = [expr_to_regex(expr)]
-    return "".join(f"(?<!{p})" for p in parts)
+    raw = _lb_branches(expr)
+    if any(b == "" for b in raw):
+        return "(?!)"  # a zero-width branch always matches: never fires
+    return "".join(f"(?<!{b})" for b in raw)
 
 
 def expr_to_regex(expr: str) -> str:
@@ -175,7 +237,7 @@ def expr_to_regex(expr: str) -> str:
             alts = value.split("\x00")
             parts.append("(?:" + "|".join(expr_to_regex(a) for a in alts) + ")")
         elif kind == "opt":
-            parts.append("(?:" + re.escape(value) + ")?")
+            parts.append("(?:" + expr_to_regex(value) + ")?")
         elif kind == "space":
             parts.append(SPACE)
         elif kind == "boundary":
@@ -200,6 +262,8 @@ def expr_to_literal(expr: str) -> str:
             parts.append(expr_to_literal(value.split("\x00")[0]))
         elif kind == "space":
             parts.append(" ")
+        elif kind == "opt":
+            parts.append(expr_to_literal(value))
         elif kind in ("boundary", "anchor"):
             raise ValueError(f"{kind} is not valid in a result expression")
     return "".join(parts)
@@ -222,7 +286,7 @@ def expr_max_length(expr: str) -> int:
         elif kind == "alt":
             total += max(expr_max_length(a) for a in value.split("\x00"))
         elif kind == "opt":
-            total += len(value)
+            total += expr_max_length(value)
         elif kind == "grp":
             total += expr_max_length(value)
         # cat: concatenation marker

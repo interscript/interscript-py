@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .expr import expr_max_length, expr_neg_lookbehind, expr_to_literal, expr_to_regex, is_plain_string
+from .expr import expr_lookbehind, expr_max_length, expr_neg_lookbehind, expr_to_literal, expr_to_regex, is_plain_string
 
 
 class ExecutionError(ValueError):
@@ -35,7 +35,7 @@ def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str]
         pat = expr_to_regex(sub["pattern"])
         full = pat
         if sub.get("before"):
-            full = "(?<=" + expr_to_regex(sub["before"]) + ")" + full
+            full = expr_lookbehind(sub["before"]) + full
         if sub.get("not_before"):
             full = expr_neg_lookbehind(sub["not_before"]) + full
         if sub.get("not_after"):
