@@ -406,4 +406,6 @@ def test_non_word_boundary_uses_the_word_property():
     نُورُالدِين came out Nurualdin instead of Nur al Din."""
     e = _load("odni-ara-Arab-Latn-2015")
     assert e.transliterate("نُورُالدِين") == "Nur al Din"
-    assert e.transliterate("عَبدُاللَّه") == "’Abdallah"
+    # the map's own spelling (shadda before fatha); a fatha-before-
+    # shadda variant yields the same result in Ruby and here.
+    assert e.transliterate("عَبدُاللَّه") == "’Abdallah"
