@@ -17,20 +17,18 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .expr import expr_lookbehind, expr_max_length, expr_neg_lookbehind, expr_to_literal, expr_to_regex, is_plain_string
+from .expr import expr_lookbehind, expr_max_length, expr_neg_lookbehind, expr_to_literal, expr_to_regex
 
 
 class ExecutionError(ValueError):
     """The map uses a construct this engine does not implement yet."""
 
 
-def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str], dict[str, str]]:
+def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str]]:
     """Compile one parallel group: longest-pattern-first alternation
     with a named group per sub; lookaround guards for before:/after:.
     Plain-string patterns additionally feed the casing maps."""
     indexed = []
-    anchor_results: dict[str, str] = {}
-    n = len(subs)
     for i, sub in enumerate(subs):
         pat = expr_to_regex(sub["pattern"])
         full = pat
@@ -48,27 +46,12 @@ def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str]
                 key += expr_max_length(sub[guard])
         key += sub.get("priority", 0)
         indexed.append((key, full, f"s{i}"))
-        if is_plain_string(sub["pattern"]) and not any(sub.get(g) for g in ("before", "after", "not_before", "not_after")):
-            src = expr_to_literal(sub["pattern"])
-            if src.upper() != src:
-                anchor_results[f"a{i}"] = expr_to_literal(sub["result"])
-                indexed.append((len(src), re.escape(src.upper()), f"a{i}"))
     indexed.sort(key=lambda t: -t[0])
     combined = "|".join(f"(?P<{name}>{full})" for _, full, name in indexed)
     pattern = re.compile(combined) if indexed else re.compile(r"(?!)")
 
     results = {f"s{i}": expr_to_literal(sub["result"]) for i, sub in enumerate(subs)}
-    results.update(anchor_results)
-    casing_map: dict[str, str] = {}
-    upper_dst: dict[str, str] = {}
-    for sub in subs:
-        if is_plain_string(sub["pattern"]) and not any(sub.get(g) for g in ("before", "after", "not_before", "not_after")):
-            src = expr_to_literal(sub["pattern"])
-            dst = expr_to_literal(sub["result"])
-            casing_map[src] = dst
-            if src.upper() != src:
-                upper_dst[src.upper()] = dst
-    return pattern, {"casing": casing_map, "upper": upper_dst, "results": results}, {}
+    return pattern, results
 
 
 _CASE_FNS = {
@@ -89,7 +72,6 @@ class Engine:
         self.on_unsupported = on_unsupported
         self.skipped_unsupported: list[str] = []
         self._compiled: re.Pattern[str] | None = None
-        self._compiled_map: dict[str, str] = {}
         self._group_results: dict[str, str] = {}
         self._compiled_source: int | None = None
 
@@ -103,51 +85,15 @@ class Engine:
             text = self._run_op(child, text)
         return text
 
-    def _group_repl(self, m: re.Match[str], text: str) -> str:
-        name = m.lastgroup if m.lastgroup else ""
-        if name in self._group_results:
-            result = self._group_results[name]
-            tok = m.group(0)
-            if result != result.upper() and tok == tok.upper() and tok != tok.lower():
-                ws, we = m.start(), m.end()
-                while ws > 0 and text[ws - 1].isalpha():
-                    ws -= 1
-                while we < len(text) and text[we].isalpha():
-                    we += 1
-                if text[ws:we].isupper():
-                    return result.upper()
-            return result
-        return self._parallel_repl(m, text)
-
-    def _parallel_repl(self, m: re.Match[str], text: str) -> str:
-        tok = m.group(0)
-        dst = self._compiled_map.get(tok) or self._upper_dst.get(tok)
-        if dst is None:
-            return tok
-        # interscript-ruby casing convention: inside an ALL-CAPS source
-        # word, a fully-uppercase source token uppercases its result
-        # (Я -> Ya normally, YA inside БЯГА).
-        if dst != dst.upper() and tok == tok.upper() and tok != tok.lower():
-            ws, we = m.start(), m.end()
-            while ws > 0 and text[ws - 1].isalpha():
-                ws -= 1
-            while we < len(text) and text[we].isalpha():
-                we += 1
-            if text[ws:we].isupper():
-                return dst.upper()
-        return dst
-
     def _run_op(self, op: dict, text: str) -> str:
         kind = op.get("kind")
         if kind == "parallel":
             if self._compiled is None or self._compiled_source != id(op):
-                pattern, maps, _ = _compile_parallel(op["subs"])
+                pattern, results = _compile_parallel(op["subs"])
                 self._compiled = pattern
-                self._compiled_map = maps["casing"]
-                self._upper_dst = maps["upper"]
-                self._group_results = maps["results"]
+                self._group_results = results
                 self._compiled_source = id(op)
-            return self._compiled.sub(lambda m: self._group_repl(m, text), text)
+            return self._compiled.sub(lambda m: self._group_results[m.lastgroup], text)
         if kind == "subst":
             flags = re.IGNORECASE if op.get("ignore_case") else 0
             pattern = re.compile(op["pattern"], flags)
