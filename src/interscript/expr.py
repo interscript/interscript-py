@@ -17,7 +17,7 @@ _TOKEN = re.compile(
     r'|any\(\s*"(?P<rlo>(?:[^"\\]|\\.)*)"\s*\.\.\s*"(?P<rhi>(?:[^"\\]|\\.)*)"\s*\)'
     r'|any\(\s*"(?P<cls>(?:[^"\\]|\\.)*)"\s*\)'
     r"|(?P<space>\bspace\b)|(?P<boundary>\bboundary\b)"
-    r"|(?P<stdin_kw>\b(?:alpha|digit|word|any_character)\b)"
+    r"|(?P<stdin_kw>\b(?:alpha|digit|word|not_word|any_character)\b)"
     r"|(?P<nwb>\bnon_word_boundary\b)"
     r'|capture\(\s*(?P<grp>(?:[^()\\]|\\.|\([^()]*\))*)\s*\)' 
     r"|(?P<line_end>\bline_end\b)|(?P<line_start>\bline_start\b)"
@@ -74,7 +74,7 @@ def _read_bracketed(expr: str, pos: int) -> tuple[str, int]:
                 return expr[pos + 1 : i], i + 1
         i += 1
     raise ValueError(f"unterminated any([ in {expr!r}")
-_UNESC = re.compile(r"\\u([0-9a-fA-F]{4})")
+_UNESC = re.compile(r"\\(u[0-9a-fA-F]{4}|.)", re.S)
 
 SPACE = re.escape(" ")
 
@@ -84,6 +84,7 @@ _STDLIB_REGEX = {
     "alpha": "[a-zA-Z]",
     "digit": "[0-9]",
     "word": "[a-zA-Z0-9_]",
+    "not_word": "[^a-zA-Z0-9_]",
     "any_character": ".",
 }
 
@@ -100,7 +101,13 @@ _BOUNDARY = "(?:(?<=" + _WORD + ")(?!" + _WORD + ")|(?<!" + _WORD + ")(?=" + _WO
 
 
 def _unesc(s: str) -> str:
-    return _UNESC.sub(lambda m: chr(int(m.group(1), 16)), s)
+    def repl(m: re.Match) -> str:
+        g = m.group(1)
+        if g[0] == "u" and len(g) == 5:
+            return chr(int(g[1:], 16))
+        return {"n": "\n", "t": "\t", "r": "\r"}.get(g, g)
+
+    return _UNESC.sub(repl, s)
 
 
 _ANY_LIST = re.compile(r"any\(\s*\[")

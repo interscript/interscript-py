@@ -357,3 +357,42 @@ def test_any_character_renders():
     e = _load("kp-kor-Hang-Latn-2002")
     assert e.transliterate("고비리") == "Kobi-ri"
     assert e.transliterate("교구동") == "Kyogu-dong"
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_quote_escape_survives_the_round_trip():
+    """gost-rus maps the hard sign to a double quote (to "\\""); the
+    value round-trips through expression source, where the unescaper
+    only decoded \\uXXXX — \\" stayed a backslash-quote and съезд came
+    out s\\"ezd."""
+    e = _load("gost-rus-Cyrl-Latn-7.79-2000-2002")
+    assert e.transliterate("съезд") == 's"ezd'
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_run_executes_the_named_dependency_stage():
+    """mvd-rus-2010 runs the 2008 dependency's translit stage — not its
+    main, which ends in compose. Running main precomposed l+U+0301 into
+    ĺ before the postrule could strip the acute (Vasiĺeva)."""
+    e = _load("mvd-rus-Cyrl-Latn-2010")
+    assert e.transliterate("Васiльева") == "Vasileva"
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_not_word_stdlib_alias_renders():
+    """odni-che maps the digit 1 (a palochka stand-in) guarded by
+    not_word; the alias had no stdlib entry and the rules were
+    dropped — Ахмадк1ант kept its 1."""
+    e = _load("odni-che-Cyrl-Latn-2015")
+    assert e.transliterate("Ахмадк1ант") == "Akhmadkant"
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_library_string_alias_is_a_class_inside_any():
+    """Measured in Ruby: an alias imported from a library whose value
+    is a plain string acts as a CHARACTER CLASS inside any() (the
+    unicode library's greek), while an in-map string alias is a literal
+    sequence. alalc-ell's γ-nasal rules guard on any(greek)."""
+    e = _load("alalc-ell-Grek-Latn-2010")
+    assert e.transliterate("γκέγκε") == "gkenke"
+    assert e.transliterate("Λαγκαδάς") == "Lankadas"

@@ -59,7 +59,7 @@ _FUNCTIONS = {"upcase", "downcase", "title_case", "reverse", "strip", "swapcase"
 _CONSTRAINTS = {"before", "after", "not_before", "not_after"}
 # Stdlib aliases usable as bare names (Ruby Stdlib::ALIASES, resolved
 # before doc-local aliases, mirroring the interpreter's lookup order).
-_STDLIB_EXPR = {"alpha", "digit", "word", "any_character"}
+_STDLIB_EXPR = {"alpha", "digit", "word", "not_word", "any_character"}
 # Tokens that terminate an item inside a rule; a bare word equal to one
 # of these is a keyword, never an alias reference.
 _KEYWORDS = _CONSTRAINTS | {"to", "from", "note"}
@@ -768,7 +768,7 @@ def _regex_of(item: dict, aliases: dict[str, str]) -> str:
         if item.get("map"):
             return _qualified_regex(item["map"], name)
         if name in _STDLIB_EXPR:
-            return {"alpha": "[a-zA-Z]", "digit": "[0-9]", "word": "[a-zA-Z0-9_]", "any_character": "."}[name]
+            return {"alpha": "[a-zA-Z]", "digit": "[0-9]", "word": "[a-zA-Z0-9_]", "not_word": "[^a-zA-Z0-9_]", "any_character": "."}[name]
         if name in _imported:
             return _qualified_regex(None, name)
         if name not in aliases:
@@ -875,7 +875,10 @@ def _stage_tree(
         dep = body_item.get("dependency")
         if dep:
             target = dep_aliases.get(dep, dep)
-            return {"kind": "run", "map": target}
+            op = {"kind": "run", "map": target}
+            if body_item.get("stage"):
+                op["stage"] = body_item["stage"]
+            return op
         return {"kind": "run_stage", "name": body_item["stage"]}
     if kind in ("compose", "decompose"):
         return {"kind": kind}
@@ -979,7 +982,14 @@ def _library_aliases(name: str, libs_dir: Path) -> dict[str, str]:
                 # Library aliases may reference aliases defined earlier
                 # in the same file (var-kor: jamo = any([jamo_leading_cons,
                 # ...])); substitute them, outside string literals only.
-                aliases[m.group(1)] = _subst_alias_refs(value, aliases)
+                value = _subst_alias_refs(value, aliases)
+                # A library alias holding a bare string acts as a
+                # character class inside any() (measured: the unicode
+                # library's greek); an in-map string alias would be a
+                # literal sequence instead.
+                if re.fullmatch(r'"(?:[^"\\]|\\.)*"', value):
+                    value = f"any({value})"
+                aliases[m.group(1)] = value
     _LIB_CACHE[name] = aliases
     return aliases
 
