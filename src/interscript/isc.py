@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .expr import expr_to_regex
+from .expr import expr_lookbehind, expr_neg_lookbehind, expr_to_regex
 
 
 class IscParseError(ValueError):
@@ -670,10 +670,7 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
     if kind == "capture_group":
         return "capture(" + _render_item(item["inner"], aliases) + ")"
     if kind == "maybe":
-        inner = item["inner"]
-        if inner["type"] != "string":
-            raise UnsupportedConstruct("maybe() over non-string items")
-        return f'maybe("{_escape(inner["value"])}")'
+        return "maybe(" + _render_item(item["inner"], aliases) + ")"
     if kind == "primitive":
         name = item["name"]
         if name == "space":
@@ -794,21 +791,23 @@ def _repl_of(item: dict, aliases: dict[str, str]) -> str:
     raise UnsupportedConstruct(f"item kind {kind} in a result")
 
 
-def _guarded_regex(rule: dict, aliases: dict[str, str]) -> str:
+def _guarded_regex(rule: dict, aliases: dict[str, str], expr_aliases: dict[str, str]) -> str:
     """Rule pattern wrapped with its before/after constraints as
-    lookarounds (the subst-family rendering of parallel constraints)."""
+    lookarounds (the subst-family rendering of parallel constraints).
+    Guards render through the expression layer so mixed-width
+    lookbehinds distribute over branches (Python re is stricter than
+    Onigmo here)."""
     prefix = ""
     suffix = ""
     for constraint in rule["constraints"]:
-        fragment = _regex_of(constraint["item"], aliases)
         if constraint["kind"] == "before":
-            prefix += f"(?<={fragment})"
+            prefix += expr_lookbehind(_render_item(constraint["item"], expr_aliases))
         elif constraint["kind"] == "not_before":
-            prefix += f"(?<!{fragment})"
+            prefix += expr_neg_lookbehind(_render_item(constraint["item"], expr_aliases))
         elif constraint["kind"] == "after":
-            suffix += f"(?={fragment})"
+            suffix += "(?=" + _regex_of(constraint["item"], aliases) + ")"
         elif constraint["kind"] == "not_after":
-            suffix += f"(?!{fragment})"
+            suffix += "(?!" + _regex_of(constraint["item"], aliases) + ")"
     return prefix + _regex_of(rule["from"], aliases) + suffix
 
 
@@ -1042,7 +1041,7 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
                 _imported.setdefault(name, d["target"])
 
     def _subst(rule: dict) -> dict:
-        pattern = _guarded_regex(rule, regex_aliases)
+        pattern = _guarded_regex(rule, regex_aliases, aliases)
         to = rule["to"]
         if to.get("type") == "function" and to.get("name") in _FUNCTIONS:
             # `to upcase` and friends: the replacement is the match
