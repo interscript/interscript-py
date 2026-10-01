@@ -47,13 +47,26 @@ def test_parallel_substitution():
     assert engine.transliterate("say hello") == "say HELLO"
 
 
-def test_all_caps_word_uppercases_result():
+def test_unmapped_uppercase_passes_through_like_ruby():
+    """Measured against the Ruby interpreter: there is NO implicit
+    casing convention. With rules for Б Г А б г а but none for Я,
+    БЯГА -> BЯGA (Я passes through), Бяга -> Byaga."""
     tree2 = parse_imp(
         'stage {\n  parallel {\n    sub "Б", "B"\n    sub "я", "ya"\n'
         '    sub "Г", "G"\n    sub "А", "A"\n    sub "г", "g"\n    sub "а", "a"\n  }\n}\n'
     )
-    assert Engine(tree2).transliterate("БЯГА") == "BYAGA"
+    assert Engine(tree2).transliterate("БЯГА") == "BЯGA"
     assert Engine(tree2).transliterate("Бяга") == "Byaga"
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_explicit_uppercase_rules_not_shadowed_by_implicit_casing():
+    """bgnpcgn-ukr carries explicit sub "А" "A" rules; the engine's
+    implicit casing anchors for lowercase rules shadowed them, so
+    Авдіївська came out lowercase."""
+    e = _load("bgnpcgn-ukr-Cyrl-Latn-1965")
+    assert e.transliterate("Авдіївська") == "Avdiyivs’ka"
+    assert e.transliterate("Міськрада") == "Mis’krada"
 
 
 def test_unsupported_construct_raises_by_default():
