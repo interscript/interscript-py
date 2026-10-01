@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 
 from interscript.isc import IscParseError, UnsupportedConstruct, isc_to_tree
@@ -267,3 +270,19 @@ def test_imported_alias_resolves():
     subst = tree["stages"][0]["children"][0]
     assert subst["pattern"] == "404"
     assert subst["result"] == "500"
+
+
+@pytest.mark.skipif(
+    not Path(os.environ.get("INTERSCRIPT_MAPS_PATH", Path(__file__).parent.parent.parent / "maps" / "maps")).is_dir(),
+    reason="interscript maps repo not present",
+)
+def test_library_aliases_resolve_intra_library_references():
+    """var-kor defines jamo in terms of other library aliases; the
+    harvested value must have those substituted (they were previously
+    dropped silently by the any-list tokenizer)."""
+    from interscript.isc import _library_aliases
+
+    libs = Path(os.environ.get("INTERSCRIPT_MAPS_PATH", Path(__file__).parent.parent.parent / "maps" / "maps")).parent / "libs"
+    al = _library_aliases("var-kor", libs)
+    assert "jamo_leading_cons" not in al["jamo"]
+    assert "\\u1100" in al["jamo"] or "ᄀ" in al["jamo"]
