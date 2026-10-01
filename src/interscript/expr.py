@@ -123,3 +123,23 @@ def expr_to_literal(expr: str) -> str:
 
 def is_plain_string(expr: str) -> bool:
     return bool(re.fullmatch(r'"(?:[^"\\]|\\.)*"', expr.strip()))
+
+
+def expr_max_length(expr: str) -> int:
+    """The Ruby runtime's parallel-selection key: Rule::Sub#max_length =
+    from + before + after + not_before + not_after (+ priority), where a
+    zero-width stdlib alias (boundary, line_start, ...) counts 1."""
+    total = 0
+    for kind, value in _scan(expr, "expression"):
+        if kind == "lit":
+            total += len(value)
+        elif kind in ("cls", "range", "space", "boundary", "nwb", "anchor"):
+            total += 1
+        elif kind == "alt":
+            total += max(len(a) for a in value.split("\x00"))
+        elif kind == "opt":
+            total += len(value)
+        elif kind == "grp":
+            total += expr_max_length(value)
+        # cat: concatenation marker
+    return total

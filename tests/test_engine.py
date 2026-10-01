@@ -115,3 +115,23 @@ def test_engine_separate_and_title_case():
     )
     assert transliterate("tc", "hello world") == "Hello world"
     assert transliterate("tc", "hello world\nhello hello") == "Hello world\nHello hello"
+
+
+def test_parallel_selection_matches_ruby_max_length():
+    """Selection mirrors Ruby Rule::Sub#max_length: from + all guard
+    lengths (+priority), zero-width aliases counting 1. A longer later
+    rule (4) must beat an earlier boundary-guarded one (3) — the
+    alalc-ara hamza shape ("\u0623\u064e" vs boundary+"\u0623")."""
+    tree = parse_imp(
+        'stage {\n  parallel {\n'
+        '    sub boundary + "ab", "X"\n'
+        '    sub "abcd", "Y"\n  }\n}\n'
+    )
+    assert Engine(tree).transliterate("abcd") == "Y"
+    # Equal keys keep source order, like Ruby's index tiebreak.
+    tree2 = parse_imp(
+        'stage {\n  parallel {\n'
+        '    sub "ab", "X"\n'
+        '    sub "abc", "Y"\n  }\n}\n'
+    )
+    assert Engine(tree2).transliterate("abc") == "Y"
