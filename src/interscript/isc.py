@@ -832,8 +832,12 @@ def _stage_tree(
             for constraint in rule["constraints"]:
                 if constraint["kind"] == "before":
                     sub["before"] = _render_item(constraint["item"], aliases)
+                elif constraint["kind"] == "not_before":
+                    sub["not_before"] = _render_item(constraint["item"], aliases)
                 elif constraint["kind"] == "after":
                     sub["after"] = _render_item(constraint["item"], aliases)
+                elif constraint["kind"] == "not_after":
+                    sub["not_after"] = _render_item(constraint["item"], aliases)
             subs.append(sub)
         if capture_rules:
             # Capture-bearing rules degrade to ordered substitutions ahead
@@ -950,9 +954,41 @@ def _library_aliases(name: str, libs_dir: Path) -> dict[str, str]:
                 value = m.group(2)
                 if "'" in value and '"' not in value:
                     value = value.replace("'", '"')
-                aliases[m.group(1)] = value
+                # Library aliases may reference aliases defined earlier
+                # in the same file (var-kor: jamo = any([jamo_leading_cons,
+                # ...])); substitute them, outside string literals only.
+                aliases[m.group(1)] = _subst_alias_refs(value, aliases)
     _LIB_CACHE[name] = aliases
     return aliases
+
+
+def _subst_alias_refs(value: str, resolved: dict[str, str]) -> str:
+    out, i, n = [], 0, len(value)
+    while i < n:
+        c = value[i]
+        if c == '"':
+            j = i + 1
+            while j < n:
+                if value[j] == "\\":
+                    j += 2
+                    continue
+                if value[j] == '"':
+                    j += 1
+                    break
+                j += 1
+            out.append(value[i:j])
+            i = j
+        elif c.isascii() and (c.isalnum() or c == "_"):
+            j = i
+            while j < n and (value[j].isascii() and (value[j].isalnum() or value[j] in "_-")):
+                j += 1
+            word = value[i:j]
+            out.append(resolved.get(word, word))
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = "raise") -> dict:

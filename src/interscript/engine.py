@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .expr import expr_max_length, expr_to_literal, expr_to_regex, is_plain_string
+from .expr import expr_max_length, expr_neg_lookbehind, expr_to_literal, expr_to_regex, is_plain_string
 
 
 class ExecutionError(ValueError):
@@ -36,6 +36,10 @@ def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str]
         full = pat
         if sub.get("before"):
             full = "(?<=" + expr_to_regex(sub["before"]) + ")" + full
+        if sub.get("not_before"):
+            full = expr_neg_lookbehind(sub["not_before"]) + full
+        if sub.get("not_after"):
+            full = full + "(?!" + expr_to_regex(sub["not_after"]) + ")"
         if sub.get("after"):
             full = full + "(?=" + expr_to_regex(sub["after"]) + ")"
         key = expr_max_length(sub["pattern"])
@@ -44,7 +48,7 @@ def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str]
                 key += expr_max_length(sub[guard])
         key += sub.get("priority", 0)
         indexed.append((key, full, f"s{i}"))
-        if is_plain_string(sub["pattern"]) and not sub.get("before") and not sub.get("after"):
+        if is_plain_string(sub["pattern"]) and not any(sub.get(g) for g in ("before", "after", "not_before", "not_after")):
             src = expr_to_literal(sub["pattern"])
             if src.upper() != src:
                 anchor_results[f"a{i}"] = expr_to_literal(sub["result"])
@@ -58,7 +62,7 @@ def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str]
     casing_map: dict[str, str] = {}
     upper_dst: dict[str, str] = {}
     for sub in subs:
-        if is_plain_string(sub["pattern"]) and not sub.get("before") and not sub.get("after"):
+        if is_plain_string(sub["pattern"]) and not any(sub.get(g) for g in ("before", "after", "not_before", "not_after")):
             src = expr_to_literal(sub["pattern"])
             dst = expr_to_literal(sub["result"])
             casing_map[src] = dst

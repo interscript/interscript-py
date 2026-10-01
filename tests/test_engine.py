@@ -152,3 +152,63 @@ def test_boundary_treats_combining_marks_as_word_chars():
     assert Engine(tree).transliterate("dئِ") == "d'i"
     # ئ at a true word end: the boundary rule fires.
     assert Engine(tree).transliterate("dئ") == "d'a"
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_not_guards_are_match_constraints_not_sort_keys_only():
+    """Ruby compiles not_before/not_after as real guards (negative
+    lookbehind/lookahead — interpreter#build_regexp). The alalc-ara
+    shape: mas'alah keeps the hamza mark only because أ+fatḥa -> 'a'
+    declines when ة/ل FOLLOWS (not_after is following context)."""
+    import tempfile, os
+    from interscript import add_load_path, transliterate
+
+    d = tempfile.mkdtemp()
+    open(os.path.join(d, "ng.isc"), "w").write(
+        "system \"ng\" {\n"
+        "  stage main {\n"
+        "    parallel {\n"
+        "      sub {\n"
+        "        from \"xy\"\n"
+        "        to \"A\"\n"
+        "        not_after any(\"ab\")\n"
+        "      }\n"
+        "      sub {\n"
+        "        from \"zw\"\n"
+        "        to \"B\"\n"
+        "        not_before any(\"pq\")\n"
+        "      }\n"
+        "      sub \"x\" \"Q\"\n"
+        "      sub \"z\" \"Z\"\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    add_load_path(d)
+    # not_after: "xy" followed by a/b declines -> bare x rule fires.
+    assert transliterate("ng", "xya") == "Qya"
+    assert transliterate("ng", "xyc") == "Ac"
+    # not_before: "zw" preceded by p/q declines.
+    assert transliterate("ng", "pzw") == "pZw"
+    assert transliterate("ng", "czw") == "cB"
+
+
+def test_any_list_alternatives_are_full_expressions():
+    """any([...]) alternatives are full items (Ruby: Any of Items, each
+    may be a Group). The list tokenizer kept only quoted strings, so
+    bare atoms like boundary were silently dropped and not_before
+    guards lost their boundary branch — alalc-ara word-initial آ then
+    took the medial "’ā" rule instead of "ā"."""
+    tree = parse_imp(
+        'stage {\n  parallel {\n'
+        '    sub any([boundary + "ab", "q"]), "X"\n'
+        '    sub "b", "Y"\n'
+        '  }\n}\n'
+    )
+    e = Engine(tree)
+    # boundary-guarded alternative fires at word start.
+    assert e.transliterate("ab") == "X"
+    assert e.transliterate("q") == "X"
+    # no boundary before "ab" -> the alternative declines, bare b fires.
+    assert e.transliterate("xab") == "xaY"
+    assert e.transliterate("cab") == "caY"
