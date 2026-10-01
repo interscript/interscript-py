@@ -22,7 +22,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .expr import expr_lookbehind, expr_neg_lookbehind, expr_to_regex
+from .expr import _BOUNDARY, _WORD, expr_lookbehind, expr_neg_lookbehind, expr_to_regex
+
+# Ruby \w is ASCII-only; the same divergence the expression layer fixes.
+_WORD_BOUNDARY = _BOUNDARY
+_NON_WORD_BOUNDARY = "(?:(?<=" + _WORD + ")(?=" + _WORD + ")|(?<!" + _WORD + ")(?!" + _WORD + "))"
 
 
 class IscParseError(ValueError):
@@ -674,6 +678,8 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
         return "capture(" + _render_item(item["inner"], aliases) + ")"
     if kind == "maybe":
         return "maybe(" + _render_item(item["inner"], aliases) + ")"
+    if kind == "some":
+        return "some(" + _render_item(item["inner"], aliases) + ")"
     if kind == "primitive":
         name = item["name"]
         if name == "space":
@@ -738,6 +744,8 @@ def _regex_of(item: dict, aliases: dict[str, str]) -> str:
         return "[" + re.escape(item["lo"]) + "-" + re.escape(item["hi"]) + "]"
     if kind == "maybe":
         return "(?:" + _regex_of(item["inner"], aliases) + ")?"
+    if kind == "some":
+        return "(?:" + _regex_of(item["inner"], aliases) + ")+"
     if kind == "capture_group":
         return "(" + _regex_of(item["inner"], aliases) + ")"
     if kind == "capture":
@@ -745,8 +753,8 @@ def _regex_of(item: dict, aliases: dict[str, str]) -> str:
         return f"\\{item['index']}"
     if kind == "primitive":
         return {
-            "boundary": r"\b",
-            "non_word_boundary": r"\B",
+            "boundary": _WORD_BOUNDARY,
+            "non_word_boundary": _NON_WORD_BOUNDARY,
             "line_start": "^",
             "line_end": "$",
             "space": " ",

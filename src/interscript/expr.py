@@ -87,14 +87,15 @@ _STDLIB_REGEX = {
     "any_character": ".",
 }
 
-# Ruby's \b counts combining marks as word characters; Python's \w
-# does not (Mn is not alphanumeric). At a hamza-carrier + kasra
-# junction Ruby sees no boundary while Python does — word-final rules
-# fired wrongly and doubled vowels. Express the boundary as an
-# explicit word/non-word transition over a word class that includes
-# combining marks (Mnemonic ranges: combining diacritics 0300-036F,
-# Arabic diacritics 064B-065F, 0670, and Quranic annotation 06D6-06ED).
-_WORD = r"[\w\u0300-\u036F\u064B-\u065F\u0670\u06D6-\u06ED]"
+# Ruby's \b is Unicode-aware (the Word property: letters, MARKS,
+# digits, connectors) while its \w stays ASCII-only; Python's \b uses
+# \w, which excludes combining marks. At a hamza-carrier + kasra or
+# क + anusvara junction Ruby therefore sees no boundary where Python
+# does, and word-final rules fired wrongly (dā'aim for dā'im,
+# kṁganā for kaṁganā). The boundary is expressed explicitly over a
+# word class that adds every Mark range (290 ranges, generated) to
+# \w, plus the Join_Control characters.
+_WORD = "[\\ẁ-ͯ҃-҉֑-ֽֿׁ-ׂׄ-ׇׅؐ-ًؚ-ٰٟۖ-ۜ۟-ۤۧ-۪ۨ-ܑۭܰ-݊ަ-ް߫-߽߳ࠖ-࠙ࠛ-ࠣࠥ-ࠧࠩ-࡙࠭-࡛࣓-ࣣ࣡-ःऺ-़ा-ॏ॑-ॗॢ-ॣঁ-ঃ়া-ৄে-ৈো-্ৗৢ-ৣ৾ਁ-ਃ਼ਾ-ੂੇ-ੈੋ-੍ੑੰ-ੱੵઁ-ઃ઼ા-ૅે-ૉો-્ૢ-ૣૺ-૿ଁ-ଃ଼ା-ୄେ-ୈୋ-୍୕-ୗୢ-ୣஂா-ூெ-ைொ-்ௗఀ-ఄా-ౄె-ైొ-్ౕ-ౖౢ-ౣಁ-ಃ಼ಾ-ೄೆ-ೈೊ-್ೕ-ೖೢ-ೣഀ-ഃ഻-഼ാ-ൄെ-ൈൊ-്ൗൢ-ൣඁ-ඃ්ා-ුූෘ-ෟෲ-ෳัิ-ฺ็-๎ັິ-ຼ່-ໍ༘-༹༙༵༷༾-༿ཱ-྄྆-྇ྍ-ྗྙ-ྼ࿆ါ-ှၖ-ၙၞ-ၠၢ-ၤၧ-ၭၱ-ၴႂ-ႍႏႚ-ႝ፝-፟ᜒ-᜔ᜲ-᜴ᝒ-ᝓᝲ-ᝳ឴-៓៝᠋-᠍ᢅ-ᢆᢩᤠ-ᤫᤰ-᤻ᨗ-ᨛᩕ-ᩞ᩠-᩿᩼᪰-ᫀᬀ-ᬄ᬴-᭄᭫-᭳ᮀ-ᮂᮡ-ᮭ᯦-᯳ᰤ-᰷᳐-᳔᳒-᳨᳭᳴᳷-᳹᷀-᷹᷻-᷿⃐-⃰⳯-⵿⳱ⷠ-〪ⷿ-゙〯-゚꙯-꙲ꙴ-꙽ꚞ-ꚟ꛰-꛱ꠂ꠆ꠋꠣ-ꠧ꠬ꢀ-ꢁꢴ-ꣅ꣠-꣱ꣿꤦ-꤭ꥇ-꥓ꦀ-ꦃ꦳-꧀ꧥꨩ-ꨶꩃꩌ-ꩍꩻ-ꩽꪰꪲ-ꪴꪷ-ꪸꪾ-꪿꫁ꫫ-ꫯꫵ-꫶ꯣ-ꯪ꯬-꯭ﬞ︀-️︠-𐇽𐋠︯𐍶-𐍺𐨁-𐨃𐨅-𐨆𐨌-𐨏𐨸-𐨿𐨺𐫥-𐫦𐴤-𐴧𐺫-𐽆𐺬-𐽐𑀀-𑀂𑀸-𑁆𑁿-𑂂𑂰-𑂺𑄀-𑄂𑄧-𑄴𑅅-𑅆𑅳𑆀-𑆂𑆳-𑇀𑇉-𑇌𑇎-𑇏𑈬-𑈷𑈾𑋟-𑋪𑌀-𑌃𑌻-𑌼𑌾-𑍄𑍇-𑍈𑍋-𑍍𑍗𑍢-𑍣𑍦-𑍬𑍰-𑍴𑐵-𑑆𑑞𑒰-𑓃𑖯-𑖵𑖸-𑗀𑗜-𑗝𑘰-𑙀𑚫-𑚷𑜝-𑜫𑠬-𑠺𑤰-𑤵𑤷-𑤸𑤻-𑤾𑥀𑥂-𑥃𑧑-𑧗𑧚-𑧠𑧤𑨁-𑨊𑨳-𑨹𑨻-𑨾𑩇𑩑-𑩛𑪊-𑪙𑰯-𑰶𑰸-𑰿𑲒-𑲧𑲩-𑲶𑴱-𑴶𑴺𑴼-𑴽𑴿-𑵅𑵇𑶊-𑶎𑶐-𑶑𑶓-𑶗𑻳-𑻶𖫰-𖫴𖬰-𖬶𖽏𖽑-𖾇𖾏-𖾒𖿤𖿰-𖿱𛲝-𛲞𝅥-𝅩𝅭-𝅲𝅻-𝆂𝆅-𝆋𝆪-𝆭𝉂-𝉄𝨀-𝨶𝨻-𝩬𝩵𝪄𝪛-𝪟𝪡-𝪯𞀀-𞀆𞀈-𞀘𞀛-𞀡𞀣-𞀤𞀦-𞀪𞄰-𞄶𞋬-𞣐𞋯-𞣖𞥄-𞥊󠄀-󠇯\u200C\u200D]"
 _BOUNDARY = "(?:(?<=" + _WORD + ")(?!" + _WORD + ")|(?<!" + _WORD + ")(?=" + _WORD + "))"
 
 
@@ -104,6 +105,7 @@ def _unesc(s: str) -> str:
 
 _ANY_LIST = re.compile(r"any\(\s*\[")
 _MAYBE = re.compile(r"maybe\(\s*")
+_SOME = re.compile(r"some\(\s*")
 
 
 def _read_parenthesized(expr: str, pos: int) -> tuple[str, int]:
@@ -138,6 +140,11 @@ def _scan(expr: str, want: str):
     while pos < len(expr):
         if expr[pos].isspace():
             pos += 1
+            continue
+        if _SOME.match(expr, pos):
+            paren = expr.find("(", pos)
+            inner, pos = _read_parenthesized(expr, paren)
+            out.append(("rep", inner))
             continue
         if _MAYBE.match(expr, pos):
             paren = expr.find("(", pos)
@@ -252,6 +259,8 @@ def expr_to_regex(expr: str) -> str:
             parts.append("(?:" + "|".join(expr_to_regex(a) for a in alts) + ")")
         elif kind == "opt":
             parts.append("(?:" + expr_to_regex(value) + ")?")
+        elif kind == "rep":
+            parts.append("(?:" + expr_to_regex(value) + ")+")
         elif kind == "space":
             parts.append(SPACE)
         elif kind == "stdlib":
@@ -280,6 +289,8 @@ def expr_to_literal(expr: str) -> str:
             parts.append(" ")
         elif kind == "opt":
             parts.append(expr_to_literal(value))
+        elif kind == "rep":
+            parts.append(expr_to_literal(value))
         elif kind in ("boundary", "anchor"):
             raise ValueError(f"{kind} is not valid in a result expression")
     return "".join(parts)
@@ -301,7 +312,7 @@ def expr_max_length(expr: str) -> int:
             total += 1
         elif kind == "alt":
             total += max(expr_max_length(a) for a in value.split("\x00"))
-        elif kind == "opt":
+        elif kind in ("opt", "rep"):
             total += expr_max_length(value)
         elif kind == "grp":
             total += expr_max_length(value)
