@@ -673,15 +673,21 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
             return f'any("{_escape("".join(sub["value"] for sub in items))}")'
         # any(<single alias resolving to a plain string>) is a character
         # class (measured against Ruby: the unicode library's greek);
-        # a bare alias reference stays a literal sequence.
+        # a bare alias reference stays a literal sequence. Imported
+        # aliases resolve through the qualified path.
         if (
             len(items) == 1
             and items[0]["type"] == "alias_ref"
             and not items[0].get("map")
-            and items[0]["name"] in aliases
         ):
-            resolved = aliases[items[0]["name"]]
-            if is_plain_string(resolved):
+            name = items[0]["name"]
+            if name in aliases:
+                resolved = aliases[name]
+            elif name in _imported:
+                resolved = _qualified_expr(None, name)
+            else:
+                resolved = None
+            if resolved is not None and is_plain_string(resolved):
                 return f"any({resolved})"
         return "any([" + ", ".join(_render_item(sub, aliases) for sub in items) + "])"
     if kind == "range":
@@ -1054,8 +1060,11 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
     # this map's scope; system dependencies do not.
     libs_dir = Path(filename).parent.parent / "libs" if filename else Path("libs")
     library_aliases: dict[str, str] = {}
+    lib_names: set[str] = set()
     for dep in doc["dependencies"]:
         if "/" not in dep["target"] and "." not in dep["target"]:
+            if (libs_dir / f"{dep['target']}.iml").is_file():
+                lib_names.add(dep["target"])
             library_aliases.update(_library_aliases(dep["target"], libs_dir))
 
     aliases: dict[str, str] = dict(library_aliases)
@@ -1081,6 +1090,11 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
     # were already harvested into library_aliases above.
     for d in doc["dependencies"]:
         if d.get("aliasName"):
+            continue
+        if d["target"] in lib_names:
+            # A library dependency (posix, unicode) contributes through
+            # the harvest above; an emitted map of the same name in a
+            # load path must not hijack it into the map-import path.
             continue
         from .interscript import _find_map
 
