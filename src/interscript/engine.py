@@ -139,7 +139,15 @@ class Engine:
                 target = deps[alias]
             if self._loader is None:
                 raise ExecutionError(f"run {op['map']!r}: no map loader configured")
-            return self._loader(target).transliterate(text)
+            dep = self._loader(target)
+            stage_name = op.get("stage")
+            if not stage_name:
+                return dep.transliterate(text)
+            out = text
+            for st in dep.tree.get("stages", []):
+                if st.get("name") == stage_name:
+                    out = dep._run_stage(st, out)
+            return out
         if kind == "separate":
             separator = op.get("separator", " ")
             return separator.join(text)

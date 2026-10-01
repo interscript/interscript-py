@@ -72,7 +72,7 @@ def test_tests_render_as_pairs():
 def test_dependencies_resolve_alias_for_run():
     tree = isc_to_tree(SAMPLE)
     stage_children = tree["stages"][0]["children"]
-    assert stage_children[0] == {"kind": "run", "map": "other-map"}
+    assert stage_children[0] == {"kind": "run", "map": "other-map", "stage": "main"}
 
 
 def test_parallel_subs_render_as_expr_source():
