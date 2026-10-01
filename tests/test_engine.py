@@ -346,3 +346,14 @@ def test_par_unsafe_rule_forces_megaregexp_first_wins():
         '  }\n}\n'
     )
     assert Engine(tree).transliterate("i") == "X"
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_any_character_renders():
+    """kp-kor hyphenates generics with before any_character +
+    any_character guards; the item renderer had no branch for the
+    any_character function item and silently dropped every such rule
+    (고비리 -> Kobiri instead of Kobi-ri)."""
+    e = _load("kp-kor-Hang-Latn-2002")
+    assert e.transliterate("고비리") == "Kobi-ri"
+    assert e.transliterate("교구동") == "Kyogu-dong"
