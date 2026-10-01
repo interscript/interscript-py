@@ -281,3 +281,13 @@ def test_maybe_accepts_full_expressions():
     # empty maybe + "c" still matches the bare c (Ruby parallel
     # semantics: the rule consumes just "c" here).
     assert transliterate("mb", "dc") == "dQ"
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_primitive_space_result_pads_the_string():
+    """moct-kor pads with `sub line_start space` / `sub line_end space`;
+    the subst renderer rejected primitive results and silently dropped
+    the rules, so the before-space guards on initial consonants never
+    fired: 불국사 -> ᄇulguksa instead of Bulguksa."""
+    e = _load("moct-kor-Hang-Latn-2000")
+    assert e.transliterate("불국사") == "Bulguksa"

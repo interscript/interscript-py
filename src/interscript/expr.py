@@ -17,6 +17,7 @@ _TOKEN = re.compile(
     r'|any\(\s*"(?P<rlo>(?:[^"\\]|\\.)*)"\s*\.\.\s*"(?P<rhi>(?:[^"\\]|\\.)*)"\s*\)'
     r'|any\(\s*"(?P<cls>(?:[^"\\]|\\.)*)"\s*\)'
     r"|(?P<space>\bspace\b)|(?P<boundary>\bboundary\b)"
+    r"|(?P<stdin_kw>\b(?:alpha|digit|word|any_character)\b)"
     r"|(?P<nwb>\bnon_word_boundary\b)"
     r'|capture\(\s*(?P<grp>(?:[^()\\]|\\.|\([^()]*\))*)\s*\)' 
     r"|(?P<line_end>\bline_end\b)|(?P<line_start>\bline_start\b)"
@@ -76,6 +77,15 @@ def _read_bracketed(expr: str, pos: int) -> tuple[str, int]:
 _UNESC = re.compile(r"\\u([0-9a-fA-F]{4})")
 
 SPACE = re.escape(" ")
+
+# Ruby Stdlib::ALIASES, ASCII-exact as Onigmo defines them (Python's
+# \w and \d are unicode-wide; Onigmo's are not).
+_STDLIB_REGEX = {
+    "alpha": "[a-zA-Z]",
+    "digit": "[0-9]",
+    "word": "[a-zA-Z0-9_]",
+    "any_character": ".",
+}
 
 # Ruby's \b counts combining marks as word characters; Python's \w
 # does not (Mn is not alphanumeric). At a hamza-carrier + kasra
@@ -163,6 +173,8 @@ def _scan(expr: str, want: str):
             out.append(("nwb", ""))
         elif g["grp"] is not None:
             out.append(("grp", g["grp"]))
+        elif g["stdin_kw"] is not None:
+            out.append(("stdlib", g["stdin_kw"]))
         elif g["line_end"] is not None:
             out.append(("anchor", "$"))
         elif g["line_start"] is not None:
@@ -196,6 +208,8 @@ def _lb_branches(expr: str) -> list[str]:
             expanded = [re.escape(value)]
         elif kind == "cls":
             expanded = ["[" + re.escape(value) + "]"]
+        elif kind == "stdlib":
+            expanded = [_STDLIB_REGEX[value]]
         elif kind == "range":
             lo, hi = value.split("\x00")
             expanded = ["[" + re.escape(lo) + "-" + re.escape(hi) + "]"]
@@ -240,6 +254,8 @@ def expr_to_regex(expr: str) -> str:
             parts.append("(?:" + expr_to_regex(value) + ")?")
         elif kind == "space":
             parts.append(SPACE)
+        elif kind == "stdlib":
+            parts.append(_STDLIB_REGEX[value])
         elif kind == "boundary":
             parts.append(_BOUNDARY)
         elif kind == "nwb":
@@ -281,7 +297,7 @@ def expr_max_length(expr: str) -> int:
     for kind, value in _scan(expr, "expression"):
         if kind == "lit":
             total += len(value)
-        elif kind in ("cls", "range", "space", "boundary", "nwb", "anchor"):
+        elif kind in ("cls", "range", "space", "boundary", "nwb", "anchor", "stdlib"):
             total += 1
         elif kind == "alt":
             total += max(expr_max_length(a) for a in value.split("\x00"))
