@@ -300,6 +300,17 @@ def is_plain_string(expr: str) -> bool:
     return bool(re.fullmatch(r'"(?:[^"\\]|\\.)*"', expr.strip()))
 
 
+def expr_is_par_safe(expr: str) -> bool:
+    """Ruby's parallel tree path builds literal from/to strings; a
+    boundary-like token there raises ("Can't use boundary in a par
+    context") and the whole block falls back to the megaregexp."""
+    try:
+        toks = _scan(expr, "par")
+    except ValueError:
+        return False
+    return all(k not in ("boundary", "nwb", "anchor") for k, _ in toks)
+
+
 def expr_max_length(expr: str) -> int:
     """The Ruby runtime's parallel-selection key: Rule::Sub#max_length =
     from + before + after + not_before + not_after (+ priority), where a
