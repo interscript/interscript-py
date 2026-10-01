@@ -396,3 +396,16 @@ def test_library_string_alias_is_a_class_inside_any():
     e = _load("alalc-ell-Grek-Latn-2010")
     assert e.transliterate("γκέγκε") == "gkenke"
     assert e.transliterate("Λαγκαδάς") == "Lankadas"
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_non_word_boundary_uses_the_word_property():
+    """odni-ara contracts maybe(damma)+ال after non_word_boundary; at a
+    damma|alif junction Ruby's \\B holds (both are Word-property
+    characters) but raw Python \\B, built on a mark-less \\w, does not —
+    نُورُالدِين came out Nurualdin instead of Nur al Din."""
+    e = _load("odni-ara-Arab-Latn-2015")
+    assert e.transliterate("نُورُالدِين") == "Nur al Din"
+    # the map's own spelling (shadda before fatha); a fatha-before-
+    # shadda variant yields the same result in Ruby and here.
+    assert e.transliterate("عَبدُاللَّه") == "’Abdallah"
