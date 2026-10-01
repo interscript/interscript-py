@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .expr import expr_to_literal, expr_to_regex, is_plain_string
+from .expr import expr_max_length, expr_to_literal, expr_to_regex, is_plain_string
 
 
 class ExecutionError(ValueError):
@@ -38,13 +38,18 @@ def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str]
             full = "(?<=" + expr_to_regex(sub["before"]) + ")" + full
         if sub.get("after"):
             full = full + "(?=" + expr_to_regex(sub["after"]) + ")"
-        indexed.append((pat, full, f"s{i}"))
+        key = expr_max_length(sub["pattern"])
+        for guard in ("before", "after", "not_before", "not_after"):
+            if sub.get(guard):
+                key += expr_max_length(sub[guard])
+        key += sub.get("priority", 0)
+        indexed.append((key, full, f"s{i}"))
         if is_plain_string(sub["pattern"]) and not sub.get("before") and not sub.get("after"):
             src = expr_to_literal(sub["pattern"])
             if src.upper() != src:
                 anchor_results[f"a{i}"] = expr_to_literal(sub["result"])
-                indexed.append((re.escape(src.upper()), re.escape(src.upper()), f"a{i}"))
-    indexed.sort(key=lambda t: -len(t[0]))
+                indexed.append((len(src), re.escape(src.upper()), f"a{i}"))
+    indexed.sort(key=lambda t: -t[0])
     combined = "|".join(f"(?P<{name}>{full})" for _, full, name in indexed)
     pattern = re.compile(combined) if indexed else re.compile(r"(?!)")
 
