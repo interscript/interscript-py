@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .expr import _BOUNDARY, _WORD, expr_lookbehind, expr_neg_lookbehind, expr_to_regex
+from .expr import _BOUNDARY, _WORD, expr_lookbehind, expr_neg_lookbehind, expr_to_regex, is_plain_string
 
 # Ruby \w is ASCII-only; the same divergence the expression layer fixes.
 _WORD_BOUNDARY = _BOUNDARY
@@ -671,6 +671,18 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
             len(sub["value"]) == 1 for sub in items
         ):
             return f'any("{_escape("".join(sub["value"] for sub in items))}")'
+        # any(<single alias resolving to a plain string>) is a character
+        # class (measured against Ruby: the unicode library's greek);
+        # a bare alias reference stays a literal sequence.
+        if (
+            len(items) == 1
+            and items[0]["type"] == "alias_ref"
+            and not items[0].get("map")
+            and items[0]["name"] in aliases
+        ):
+            resolved = aliases[items[0]["name"]]
+            if is_plain_string(resolved):
+                return f"any({resolved})"
         return "any([" + ", ".join(_render_item(sub, aliases) for sub in items) + "])"
     if kind == "range":
         return f'any("{_escape(item["lo"])}".."{_escape(item["hi"])}")'
@@ -792,6 +804,10 @@ def _repl_of(item: dict, aliases: dict[str, str]) -> str:
         return "".join(_repl_of(part, aliases) for part in item["parts"])
     if kind == "capture":
         return f"${item['index']}"
+    if kind == "capture_group":
+        # Ruby renders a capture group in a result position as the
+        # parenthesised inner text (bgnpcgn-zho: to capture("me, yao")).
+        return "(" + _repl_of(item["inner"], aliases) + ")"
     if kind == "set":
         # A to-position any() lists alternative spellings; the Ruby
         # runtime picks the first in non-iterating mode.
