@@ -53,6 +53,9 @@ class _SplitParallel(Exception):
 PRIMITIVES = {"boundary", "line_start", "line_end", "word_boundary", "non_word_boundary", "space"}
 _FUNCTIONS = {"upcase", "downcase", "title_case", "reverse", "strip", "swapcase"}
 _CONSTRAINTS = {"before", "after", "not_before", "not_after"}
+# Stdlib aliases usable as bare names (Ruby Stdlib::ALIASES, resolved
+# before doc-local aliases, mirroring the interpreter's lookup order).
+_STDLIB_EXPR = {"alpha", "digit", "word", "any_character"}
 # Tokens that terminate an item inside a rule; a bare word equal to one
 # of these is a keyword, never an alias reference.
 _KEYWORDS = _CONSTRAINTS | {"to", "from", "note"}
@@ -688,6 +691,8 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
         name = item["name"]
         if item.get("map"):
             return _qualified_expr(item["map"], name)
+        if name in _STDLIB_EXPR:
+            return name
         if name in _imported:
             return _qualified_expr(None, name)
         if name not in aliases:
@@ -750,6 +755,8 @@ def _regex_of(item: dict, aliases: dict[str, str]) -> str:
         name = item["name"]
         if item.get("map"):
             return _qualified_regex(item["map"], name)
+        if name in _STDLIB_EXPR:
+            return {"alpha": "[a-zA-Z]", "digit": "[0-9]", "word": "[a-zA-Z0-9_]", "any_character": "."}[name]
         if name in _imported:
             return _qualified_regex(None, name)
         if name not in aliases:
@@ -788,6 +795,10 @@ def _repl_of(item: dict, aliases: dict[str, str]) -> str:
         if name not in aliases:
             raise UnsupportedConstruct(f"unresolved alias {name}")
         raise UnsupportedConstruct("alias in a result")
+    if kind == "primitive":
+        if item["name"] == "space":
+            return " "
+        raise UnsupportedConstruct(f"primitive {item['name']} in a result")
     raise UnsupportedConstruct(f"item kind {kind} in a result")
 
 
