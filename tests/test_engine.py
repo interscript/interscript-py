@@ -303,3 +303,46 @@ def test_subst_boundary_treats_combining_marks_as_word_chars():
     and the schwa-killing rule fired — kaṁganā came out kṁganā."""
     e = _load("un-mar-Deva-Latn-2016")
     assert e.transliterate("कंगना") == "kaṁganā"
+
+
+def test_plain_parallel_duplicate_last_wins():
+    """Measured against Ruby: an all-plain parallel block compiles to a
+    replace tree where a later duplicate from overwrites an earlier one
+    (masm-mon lists sub "i" "й" ... sub "i" "и" to let the last win).
+    A guarded block takes the megaregexp path instead, where the
+    earliest equal-key rule that matches wins."""
+    tree = parse_imp(
+        'stage {\n  parallel {\n'
+        '    sub "i", "й"\n'
+        '    sub "ab", "X"\n'
+        '    sub "i", "и"\n'
+        '    sub "ab", "Y"\n'
+        '  }\n}\n'
+    )
+    e = Engine(tree)
+    assert e.transliterate("i ab") == "и Y"
+
+    tree2 = parse_imp(
+        'stage {\n  parallel {\n'
+        '    sub "i", "X", before: "a"\n'
+        '    sub "i", "Y"\n'
+        '  }\n}\n'
+    )
+    e2 = Engine(tree2)
+    assert e2.transliterate("ai") == "aX"
+    assert e2.transliterate("bi") == "bY"
+
+
+def test_par_unsafe_rule_forces_megaregexp_first_wins():
+    """Measured via Ruby on bgnpcgn-bal: one rule with a boundary in a
+    par-unsafe position makes the whole block fall back from the
+    replace tree (last duplicate wins) to the megaregexp (earliest
+    equal-key rule wins) — و maps to o there, not the later w."""
+    tree = parse_imp(
+        'stage {\n  parallel {\n'
+        '    sub "i", "X"\n'
+        '    sub "i", "Y"\n'
+        '    sub "z" + boundary, "B"\n'
+        '  }\n}\n'
+    )
+    assert Engine(tree).transliterate("i") == "X"

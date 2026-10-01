@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .expr import expr_lookbehind, expr_max_length, expr_neg_lookbehind, expr_to_literal, expr_to_regex
+from .expr import expr_is_par_safe, expr_lookbehind, expr_max_length, expr_neg_lookbehind, expr_to_literal, expr_to_regex, is_plain_string
 
 
 class ExecutionError(ValueError):
@@ -27,9 +27,30 @@ class ExecutionError(ValueError):
 def _compile_parallel(subs: list[dict]) -> tuple[re.Pattern[str], dict[str, str]]:
     """Compile one parallel group: longest-pattern-first alternation
     with a named group per sub; lookaround guards for before:/after:.
-    Plain-string patterns additionally feed the casing maps."""
+
+    An all-plain group compiles to a replace tree in Ruby, where a
+    later duplicate from overwrites an earlier one; a guarded group
+    takes the megaregexp, where the earliest equal-key rule wins."""
+    guards = ("before", "after", "not_before", "not_after")
+    all_plain = not any(sub.get(g) for sub in subs for g in guards) and all(
+        sub.get("result") is not None
+        and expr_is_par_safe(sub["pattern"])
+        and expr_is_par_safe(sub["result"])
+        for sub in subs
+    )
+    drop: set[int] = set()
+    if all_plain:
+        last: dict[str, int] = {}
+        for i, sub in enumerate(subs):
+            if is_plain_string(sub["pattern"]):
+                last[expr_to_literal(sub["pattern"])] = i
+        for i, sub in enumerate(subs):
+            if is_plain_string(sub["pattern"]) and last[expr_to_literal(sub["pattern"])] != i:
+                drop.add(i)
     indexed = []
     for i, sub in enumerate(subs):
+        if i in drop:
+            continue
         pat = expr_to_regex(sub["pattern"])
         full = pat
         if sub.get("before"):
