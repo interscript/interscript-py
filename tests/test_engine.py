@@ -135,3 +135,20 @@ def test_parallel_selection_matches_ruby_max_length():
         '    sub "abc", "Y"\n  }\n}\n'
     )
     assert Engine(tree2).transliterate("abc") == "Y"
+
+
+def test_boundary_treats_combining_marks_as_word_chars():
+    """Ruby's \\b counts combining marks (Arabic diacritics) as word
+    characters — a word-final rule must not fire when a kasra follows
+    the hamza carrier (dā'im, not dā'aim)."""
+    tree = parse_imp(
+        'stage {\n  parallel {\n'
+        '    sub "ئ" + boundary, "\'a"\n'
+        '    sub "ئ", "\'"\n'
+        '    sub "ِ", "i"\n'
+        '    sub "d", "d"\n  }\n}\n'
+    )
+    # ئ + kasra: no boundary — the bare-ئ rule fires, not the final one.
+    assert Engine(tree).transliterate("dئِ") == "d'i"
+    # ئ at a true word end: the boundary rule fires.
+    assert Engine(tree).transliterate("dئ") == "d'a"

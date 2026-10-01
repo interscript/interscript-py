@@ -29,6 +29,16 @@ _UNESC = re.compile(r"\\u([0-9a-fA-F]{4})")
 
 SPACE = re.escape(" ")
 
+# Ruby's \b counts combining marks as word characters; Python's \w
+# does not (Mn is not alphanumeric). At a hamza-carrier + kasra
+# junction Ruby sees no boundary while Python does — word-final rules
+# fired wrongly and doubled vowels. Express the boundary as an
+# explicit word/non-word transition over a word class that includes
+# combining marks (Mnemonic ranges: combining diacritics 0300-036F,
+# Arabic diacritics 064B-065F, 0670, and Quranic annotation 06D6-06ED).
+_WORD = r"[\w\u0300-\u036F\u064B-\u065F\u0670\u06D6-\u06ED]"
+_BOUNDARY = "(?:(?<=" + _WORD + ")(?!" + _WORD + ")|(?<!" + _WORD + ")(?=" + _WORD + "))"
+
 
 def _unesc(s: str) -> str:
     return _UNESC.sub(lambda m: chr(int(m.group(1), 16)), s)
@@ -95,7 +105,7 @@ def expr_to_regex(expr: str) -> str:
         elif kind == "space":
             parts.append(SPACE)
         elif kind == "boundary":
-            parts.append(r"\b")
+            parts.append(_BOUNDARY)
         elif kind == "nwb":
             parts.append(r"\B")
         elif kind == "grp":
