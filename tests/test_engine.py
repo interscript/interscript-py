@@ -150,10 +150,12 @@ def test_parallel_selection_matches_ruby_max_length():
     assert Engine(tree2).transliterate("abc") == "Y"
 
 
-def test_boundary_treats_combining_marks_as_word_chars():
-    """Ruby's \\b counts combining marks (Arabic diacritics) as word
-    characters — a word-final rule must not fire when a kasra follows
-    the hamza carrier (dā'im, not dā'aim)."""
+def test_boundary_uses_the_unicode_word_property_like_ruby():
+    """Ruby's \\b is Unicode-aware over the Word property, which counts
+    combining marks as word characters (its \\w is ASCII-only, but \\b
+    does not follow \\w there). A word-final rule must not fire when a
+    kasra follows the hamza carrier (dā'im, not dā'aim), and must fire
+    at a true end of word."""
     tree = parse_imp(
         'stage {\n  parallel {\n'
         '    sub "ئ" + boundary, "\'a"\n'
@@ -161,9 +163,10 @@ def test_boundary_treats_combining_marks_as_word_chars():
         '    sub "ِ", "i"\n'
         '    sub "d", "d"\n  }\n}\n'
     )
-    # ئ + kasra: no boundary — the bare-ئ rule fires, not the final one.
+    # ئ + kasra: the kasra is a Mark, hence a word char — no boundary,
+    # and the bare-ئ rule fires, not the word-final one.
     assert Engine(tree).transliterate("dئِ") == "d'i"
-    # ئ at a true word end: the boundary rule fires.
+    # ئ at a true end of word: the boundary rule fires.
     assert Engine(tree).transliterate("dئ") == "d'a"
 
 
@@ -291,3 +294,12 @@ def test_primitive_space_result_pads_the_string():
     fired: 불국사 -> ᄇulguksa instead of Bulguksa."""
     e = _load("moct-kor-Hang-Latn-2000")
     assert e.transliterate("불국사") == "Bulguksa"
+
+
+@pytest.mark.skipif(not MAPS.is_dir(), reason="interscript maps repo not present")
+def test_subst_boundary_treats_combining_marks_as_word_chars():
+    """un-mar कंगना: the subst-family path used raw \\b, so the क|ं
+    junction (anusvara is a combining mark) counted as a word boundary
+    and the schwa-killing rule fired — kaṁganā came out kṁganā."""
+    e = _load("un-mar-Deva-Latn-2016")
+    assert e.transliterate("कंगना") == "kaṁganā"

@@ -109,8 +109,8 @@ def test_parse_error_carries_position():
 
 
 def test_unsupported_construct_raises_by_default():
-    bad = 'system "x" { stage main { parallel { sub some("a") "b" } } }'
-    with pytest.raises(UnsupportedConstruct, match="some"):
+    bad = 'system "x" { stage main { parallel { sub { from "a" to "b" before unresolved_alias } } } }'
+    with pytest.raises(UnsupportedConstruct, match="unresolved"):
         isc_to_tree(bad)
 
 
@@ -127,7 +127,7 @@ def test_skip_mode_records_and_drops():
     tree = isc_to_tree(bad, on_unsupported="skip")
     assert tree["skipped_unsupported"] == []
     tree2 = isc_to_tree(
-        'system "x" { stage main { sequence { sub some("c") "d" } } }',
+        'system "x" { stage main { sequence { sub { from "c" to "d" before unresolved_alias } } } }',
         on_unsupported="skip",
     )
     assert tree2["skipped_unsupported"]
