@@ -693,6 +693,8 @@ def _render_item(item: dict, aliases: dict[str, str]) -> str:
         if name == "line_end":
             return "line_end"
         raise UnsupportedConstruct(f"primitive {name}")
+    if kind == "function" and item["name"] == "any_character":
+        return "any_character"
     if kind == "alias_ref":
         name = item["name"]
         if item.get("map"):
@@ -759,6 +761,8 @@ def _regex_of(item: dict, aliases: dict[str, str]) -> str:
             "line_end": "$",
             "space": " ",
         }.get(item["name"], None) or _unsupported_primitive(item["name"])
+    if kind == "function" and item["name"] == "any_character":
+        return "."
     if kind == "alias_ref":
         name = item["name"]
         if item.get("map"):
