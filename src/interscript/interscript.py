@@ -79,5 +79,26 @@ def load_map(map_name: str, on_unsupported: str = "raise") -> Engine:
     return engine
 
 
-def transliterate(map_name: str, text: str) -> str:
-    return load_map(map_name).transliterate(text)
+def transliterate(id: str, text: str, index_url: str | None = None) -> str:
+    """Unified conversion surface: map ids run the rule engine; model
+    ids resolve through the interscript-ml index and run the neural
+    runtime (lazy — requires the interscript[ml] extra)."""
+    if map_exist(id):
+        return load_map(id).transliterate(text)
+    try:
+        from interscript.ml import Model, PlaneModel
+        from interscript.ml.registry import RegistryError, load_index, resolve
+    except ImportError as e:  # pragma: no cover - exercised when extra missing
+        raise FileNotFoundError(
+            f"id '{id}' is not a map, and the ML layer is not installed (pip install interscript[ml])"
+        ) from e
+    try:
+        entry = load_index(index_url)[id]
+        path = resolve(id, index_url=index_url)
+    except (RegistryError, KeyError) as e:
+        raise FileNotFoundError(
+            f"id '{id}' is neither a map in the load paths nor a model in the interscript-ml index"
+        ) from e
+    if entry.kind == "plane":
+        return PlaneModel.from_zip(Path(path).read_bytes()).translate(text)
+    return Model.load(path).translate(text)
