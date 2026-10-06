@@ -28,7 +28,8 @@ Homepage = "https://www.interscript.org"
 Issues = "https://github.com/interscript/interscript-py/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+ml = ["numpy>=1.26", "pyyaml>=6.0", "onnxruntime>=1.17"]
+dev = ["pytest>=7", "onnx>=1.16"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
