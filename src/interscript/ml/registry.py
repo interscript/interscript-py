@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 import yaml
 
 DEFAULT_INDEX_URL = (
-    "https://github.com/interscript/interscript-ml/releases/download/index-v7/models-index.yaml"
+    "https://github.com/interscript/interscript-ml/releases/download/index-v8/models-index.yaml"
 )
 # primary env vars; the SECRYST_* names are deprecated aliases (kept one transition period)
 ENV_INDEX = "INTERSCRIPT_ML_INDEX"
