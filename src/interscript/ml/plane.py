@@ -27,9 +27,42 @@ class PlaneModel:
         self.mask_id = self.n_classes
         self.k = k_passes
         self.sess = ort.InferenceSession(graph, providers=["CPUExecutionProvider"])
+        # a character is a diacritic iff it occurs inside some class the
+        # artifact knows — no per-language mark tables needed
+        self._mark_chars = {ch for cls in classes for ch in cls}
+        self._class_to_id = {cls: i for i, cls in enumerate(classes)}
 
     def encode(self, text: str) -> list[int]:
         return [b + 3 for b in text.encode("utf-8")]
+
+    def _split_planes(self, text: str) -> tuple[str, list[str]]:
+        """Text -> (skeleton, per-base classes). Marks FOLLOW their base
+        letter; leading marks bind to a '\\x00' anchor (render drops it).
+        Cluster order is preserved as written — render-exactness beats
+        normalization (the Hebrew canon lesson)."""
+        skeleton: list[str] = []
+        classes: list[str] = []
+        current: list[str] = []
+
+        def close() -> None:
+            if not current:
+                return
+            if skeleton:
+                classes[-1] = classes[-1] + "".join(current)
+            else:
+                skeleton.append("\x00")
+                classes.append("".join(current))
+            current.clear()
+
+        for ch in text:
+            if ch in self._mark_chars:
+                current.append(ch)
+                continue
+            close()
+            skeleton.append(ch)
+            classes.append("")
+        close()
+        return "".join(skeleton), classes
 
     def predict_token_classes(self, text: str) -> list[int]:
         ids = np.array([self.encode(text)], dtype=np.int64)
@@ -39,18 +72,62 @@ class PlaneModel:
             plane = logits.argmax(-1)
         return plane[0].tolist()
 
-    def translate(self, text: str) -> str:
-        tok_preds = self.predict_token_classes(text)
-        # majority vote of a char's byte-token predictions
+    def _decode_pinned(self, skeleton: str, char_classes: list[str]) -> list[int]:
+        """K-pass decode with user classes pinned: pinned positions are
+        conditioned AND never overwritten."""
+        ids = np.array([self.encode(skeleton)], dtype=np.int64)
+        per_token_pin: list[int] = []
+        for ch, cls in zip(skeleton, char_classes):
+            pid = self._class_to_id.get(cls, self.mask_id)
+            per_token_pin.extend([pid] * len(ch.encode("utf-8")))
+        pin_arr = np.array(per_token_pin, dtype=np.int64)
+        pinned = pin_arr != self.mask_id
+        plane = np.full_like(ids, self.mask_id)
+        if pinned.any():
+            plane[0, pinned] = pin_arr[pinned]
+        for _ in range(self.k):
+            logits = self.sess.run(None, {"input_ids": ids, "plane_ids": plane})[0]
+            pred = logits.argmax(-1)
+            if pinned.any():
+                pred[0, pinned] = pin_arr[pinned]
+            plane = pred
+        return plane[0].tolist()
+
+    def translate(self, text: str, preserve_diacritics: bool = False) -> str:
+        if not preserve_diacritics:
+            tok_preds = self.predict_token_classes(text)
+            pos = 0
+            char_classes: list[str] = []
+            for ch in text:
+                n = len(ch.encode("utf-8"))
+                votes = tok_preds[pos : pos + n]
+                cid = max(set(votes), key=votes.count)
+                char_classes.append(self.classes[cid] if cid < self.n_classes else "")
+                pos += n
+            return render_plane(text, char_classes)
+
+        # preserve path: user diacritics are pinned inside the decode and
+        # round-trip byte-exactly (leading marks included)
+        skeleton, char_classes = self._split_planes(text)
+        tok_preds = self._decode_pinned(skeleton, char_classes)
         pos = 0
-        char_classes: list[str] = []
-        for ch in text:
+        final: list[str] = []
+        for ch, user_cls in zip(skeleton, char_classes):
             n = len(ch.encode("utf-8"))
-            votes = tok_preds[pos : pos + n]
-            cid = max(set(votes), key=votes.count)
-            char_classes.append(self.classes[cid] if cid < self.n_classes else "")
+            if user_cls:
+                final.append(user_cls)
+            else:
+                votes = tok_preds[pos : pos + n]
+                cid = max(set(votes), key=votes.count)
+                final.append(self.classes[cid] if cid < self.n_classes else "")
             pos += n
-        return render_plane(text, char_classes)
+        out: list[str] = []
+        for ch, cls in zip(skeleton, final):
+            if ch == "\x00":
+                out.append(cls)  # anchor for leading marks: emit class only
+            else:
+                out.append(ch + cls)
+        return "".join(out)
 
 
 def from_zip(data: bytes) -> PlaneModel:
