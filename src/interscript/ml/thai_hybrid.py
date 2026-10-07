@@ -3,6 +3,9 @@
 The FastThaiG2P response: dictionary hits decode at dict speed,
 out-of-vocabulary runs go to the neural model as whole spans. Maximal-
 munch longest-match segmentation; spaces/punct pass through untouched.
+
+Canonical lexicon artifact (CC BY-SA 3.0, attribution Wiktionary/Kaikki):
+https://github.com/interscript/interscript-models/releases/download/tha-lexicon-kaikki-1.0/tha-lexicon-kaikki.json
 """
 
 from __future__ import annotations
