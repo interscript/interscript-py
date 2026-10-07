@@ -81,7 +81,9 @@ def nikud_to_ipa(text: str) -> str:
                 continue
 
         if letter in ("א", "ע"):
-            out.append(vowels)  # silent guttural, vowel carries
+            # gutturals carry ʔ when vocalized (Israeli/TTS convention),
+            # fully silent when bare
+            out.append("ʔ" + vowels if vowels else "")
             continue
 
         if letter == "ה" and last:

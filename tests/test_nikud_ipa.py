@@ -44,8 +44,8 @@ class TestConsonants:
         assert nikud_to_ipa("רִי") == "ʁi"
 
     def test_gutturals_silent_with_vowel(self):
-        assert nikud_to_ipa("אָב") == "av"
-        assert nikud_to_ipa("עִיר") == "iʁ"
+        assert nikud_to_ipa("אָב") == "ʔav"
+        assert nikud_to_ipa("עִיר") == "ʔiʁ"
 
     def test_final_heh_silent(self):
         assert nikud_to_ipa("סֻכָּה") == "suka"
@@ -64,7 +64,7 @@ class TestVowels:
 
     def test_hataf(self):
         assert nikud_to_ipa("חֲנֻכָּה") == "xanuka"
-        assert nikud_to_ipa("אֱמֶת") == "emet"
+        assert nikud_to_ipa("אֱמֶת") == "ʔemet"
 
     def test_qamats_qatan_via_lexicon(self):
         # כָּל is the canonical qamats-qatan word: /kol/
@@ -93,5 +93,5 @@ class TestCoverage:
 
 class TestPassThrough:
     def test_spaces_and_latin_survive(self):
-        assert nikud_to_ipa("שָׁלוֹם עֲלֵיכֶם") == "ʃalom alexem"
+        assert nikud_to_ipa("שָׁלוֹם עֲלֵיכֶם") == "ʃalom ʔalexem"
         assert nikud_to_ipa("abc") == "abc"
