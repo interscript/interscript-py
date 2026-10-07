@@ -92,3 +92,28 @@ def build_lexicon_from_kaikki(entries, min_head_len: int = 1) -> Lexicon:
     for word, ipas in counts.items():
         lex[word] = max(ipas.items(), key=lambda kv: kv[1])[0]
     return lex
+
+
+LEXICON_URL = (
+    "https://github.com/interscript/interscript-models/releases/download/"
+    "tha-lexicon-kaikki-1.0/tha-lexicon-kaikki.json"
+)
+LEXICON_SHA256 = "6e44c7116aca3e570f6b8a12d9c0ca8f7631336147448d0818ad7e076b72b911"
+
+
+def fetch_lexicon(index_url=None, _base_url=None, _sha256=None) -> Lexicon:
+    """Fetch the canonical lexicon artifact, sha-verified (same trust
+    contract as model artifacts — no unverified data paths). Test hooks
+    take precedence over the release defaults."""
+    import hashlib
+    import json
+    import urllib.request
+
+    url = _base_url or LEXICON_URL
+    expected = _sha256 or LEXICON_SHA256
+    with urllib.request.urlopen(url) as r:
+        blob = r.read()
+    got = hashlib.sha256(blob).hexdigest()
+    if got != expected:
+        raise ValueError(f"lexicon sha256 mismatch: {got}")
+    return Lexicon(json.loads(blob.decode("utf-8")))
