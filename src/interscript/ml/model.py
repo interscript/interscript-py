@@ -10,6 +10,13 @@ from interscript.ml.tokens import EOS_ID, PAD_ID, decode, encode
 from interscript.ml.loader import load_manifest, verify_and_read
 
 
+def first_alternates(text: str) -> str:
+    """Seq2seq output contract: models trained on multi-reference
+    corpora emit '/'-separated alternates per token; the runtime
+    returns the primary choice only."""
+    return " ".join(part.split("/", 1)[0] for part in text.split())
+
+
 class Model:
     """A loaded, checksum-verified IMF v1 model.
 
@@ -61,7 +68,7 @@ class Model:
 
     def translate(self, text: str, max_len: int = 256) -> str:
         token_ids = self.generate(text, max_len=max_len)
-        return decode(token_ids)
+        return first_alternates(decode(token_ids))
 
     def generate(self, text: str, max_len: int = 256) -> list[int]:
         ids = np.array([encode(text)], dtype=np.int64)
