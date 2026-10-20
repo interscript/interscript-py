@@ -10,6 +10,13 @@ This version (0.2.0) parses the `.imp` map DSL *directly* — no
 pre-compiled Python map modules or monorepo bootstrap required. Point
 it at the map corpus and go.
 
+Interscript turns transliteration standards from paper tables into
+executable, verifiable software: authority schemes encoded once in the
+ISC language, every runtime producing provably identical output, and
+neural models (diacritization, G2P) published under the same proof
+regime — pinned artifacts, sha256 verification, frozen conformance
+vectors.
+
 Maps that need vocalized input (undiacritized Arabic, nikud-less Hebrew,
 unsegmented Thai) dispatch to a
 https://www.secryst.org[secryst crystal] through the optional phonological
@@ -79,6 +86,16 @@ remaining gaps are documented in the test suite:
 - Ruby: `gem install interscript` (https://rubygems.org/gems/interscript)
 - npm: `npm install interscript` (https://www.npmjs.com/package/interscript)
 - This: `pip install interscript`
+
+== Direction
+
+Per-language SOTA rows land through the config-driven training spine in
+https://github.com/interscript/interscript-models[interscript-models]
+(a language is two YAML files; gates are machine-checkable). The
+implementable contracts are the ISC map language and the IMF v1 model
+format with frozen conformance vectors. See the
+https://github.com/interscript/interscript-models#direction-audit-2026-10[project
+direction].
 
 == License
 
