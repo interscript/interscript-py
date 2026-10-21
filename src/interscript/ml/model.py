@@ -31,6 +31,10 @@ class Model:
 
         options = ort.SessionOptions()
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # single-thread decode: the conformance contract is byte-exact
+        # across environments (WO79); multi-thread fp16 ties flip rows
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
         graphs = verify_and_read(self.zip_path)
         self._encoder = ort.InferenceSession(
             graphs["encoder.onnx"], options, providers=_providers()
