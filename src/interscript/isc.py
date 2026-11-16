@@ -249,7 +249,12 @@ class _IscParser:
         body: list[dict] = []
         while True:
             self._skip_ws()
-            if self._peek() == "}":
+            # Progress invariant (same guard as _block_items): EOF means
+            # the block never closes — break and let the trailing
+            # _expect("}") name the failure. Pre-fix the skip-line
+            # fallback below span forever on truncated maps
+            # (interscript-py#43, the WO20 fuzz campaign's hang class).
+            if self._peek() == "}" or self._pos >= len(self._src):
                 break
             if self._peek() == "#":
                 self._skip_line()
@@ -262,7 +267,8 @@ class _IscParser:
                 rules = []
                 while True:
                     self._skip_ws()
-                    if self._peek() == "}":
+                    # Same EOF progress invariant as the stage loop.
+                    if self._peek() == "}" or self._pos >= len(self._src):
                         break
                     if self._peek() == "#":
                         self._skip_line()
@@ -534,14 +540,34 @@ class _IscParser:
                 nxt = self._src[self._pos] if self._pos < len(self._src) else ""
                 self._pos += 1
                 if nxt == "u":
-                    hex4 = self._src[self._pos : self._pos + 4]
-                    self._pos += 4
-                    result += chr(int(hex4, 16))
+                    result += self._unicode_escape()
                 else:
                     result += {"n": "\n", "t": "\t", "r": "\r"}.get(nxt, nxt)
             else:
                 result += c
         self._error("Unterminated string")
+
+    def _unicode_escape(self) -> str:
+        """Decode ``\\uXXXX`` — the grammar's esc_uni4 (exactly 4 hex
+        digits, ``grammar/isc.parg``). Any other form (short hex,
+        non-hex digits, the braced form, end of input) is a parse error
+        at the escape's position: the pipeline used to leak a raw
+        ``ValueError`` from ``int()`` here (interscript-py#44, the WO20
+        fuzz campaign's largest crash class — it fires on note text too,
+        which shares this scanner).
+
+        The capital ``\\U`` form is deliberately NOT decoded by this
+        parser: the grammar's esc_u_lone branch renders it as a literal
+        "U" with the digits as raw text — the same deviation ts carries
+        in its actions.ts (ruby's artifact parser decodes both
+        spellings; aligning the runtimes is an owner decision).
+        """
+        slash = self._pos - 2  # the backslash, for the error position
+        digits = self._src[self._pos : self._pos + 4]
+        if len(digits) < 4 or any(c not in "0123456789abcdefABCDEF" for c in digits):
+            self._error("Invalid \\u escape: expected exactly 4 hexadecimal digits", slash)
+        self._pos += 4
+        return chr(int(digits, 16))
 
     def _single_quoted(self) -> str:
         self._expect("'")
@@ -641,9 +667,10 @@ class _IscParser:
         c = self._peek()
         return c in ('"', "'") or c.isalnum() or c == "_"
 
-    def _error(self, message: str) -> None:
-        line = self._src.count("\n", 0, self._pos) + 1
-        col = self._pos - (self._src.rfind("\n", 0, self._pos) + 1) + 1
+    def _error(self, message: str, pos: int | None = None) -> None:
+        at = self._pos if pos is None else pos
+        line = self._src.count("\n", 0, at) + 1
+        col = at - (self._src.rfind("\n", 0, at) + 1) + 1
         raise IscParseError(message, line, col, self._filename)
 
 

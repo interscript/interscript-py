@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -286,3 +287,235 @@ def test_library_aliases_resolve_intra_library_references():
     al = _library_aliases("var-kor", libs)
     assert "jamo_leading_cons" not in al["jamo"]
     assert "\\u1100" in al["jamo"] or "ᄀ" in al["jamo"]
+
+
+# ---------------------------------------------------------------------------
+# WO20 differential fuzz regressions — interscript-py#43 (parse hang) and
+# interscript-py#44 (raw ValueError on malformed \u escapes).
+# ---------------------------------------------------------------------------
+
+
+def _parse_only(source: str, filename: str | None = None) -> dict:
+    """The parse layer only. Both fuzz issues live in the parser; running
+    conversion would conflate them with the engine's documented
+    UnsupportedConstruct vocabulary errors."""
+    from interscript.isc import _IscParser
+
+    return _IscParser(source, filename).parse()
+
+
+# -- interscript-py#43: truncated maps must terminate with IscParseError --
+
+
+def test_truncated_stage_unterminated_sub_raises():
+    """The campaign's 10-line repro: EOF inside `stage main` after a
+    complete `sub { }` block, with the stage and system braces
+    unterminated. Pre-fix this spun in _stage's skip-line fallback
+    forever (the loop broke only on `}`)."""
+    src = (
+        'system "VAR:hin-Deva:Latn:hunterian-1872" {\n'
+        "metadata {\n"
+        "  notes {\n"
+        "  }\n"
+        "}\n"
+        "tests {\n"
+        "}\n"
+        "stage main {\n"
+        "  sub {\n"
+        "  }\n"
+    )
+    with pytest.raises(IscParseError):
+        _parse_only(src, "hang.isc")
+
+
+def test_truncated_sequence_rule_block_raises():
+    """Same class, inner loop: EOF inside a sequence/parallel rule block
+    after a complete rule — the inner loop's skip-line fallback had the
+    identical missing-EOF guard."""
+    with pytest.raises(IscParseError):
+        _parse_only('system "x" { stage main { sequence { sub "a" "b"')
+
+
+def test_truncated_map_prefixes_terminate_named():
+    """Class closure: every truncation of a real corpus map terminates
+    with a document or a named IscParseError — never a spin, never an
+    accidental ValueError/TypeError. The fixtures are real corpus maps,
+    committed verbatim (var-ara-Arab-Arab-rababa, royin-tha-Thai-Latn-
+    1999; dependency-free so the full text parses)."""
+    fixtures = {
+        "var-ara-Arab-Arab-rababa.isc": _RABABA_MAP,
+        "royin-tha-Thai-Latn-1999.isc": _ROYIN_THA_MAP,
+    }
+    for name, text in fixtures.items():
+        # The full map parses (the sweep is meaningless otherwise).
+        _parse_only(text, name)
+        for cut in range(len(text)):
+            try:
+                _parse_only(text[:cut], name)
+            except IscParseError:
+                continue
+
+
+_RABABA_MAP = '''system "VAR:ara-Arab:Arab:rababa" {
+
+metadata {
+  authority_id var
+  id rababa
+  language iso-639-2:ara
+  source_script Arab
+  destination_script Arab
+  name RABABA the Arabic Diacritization Library
+  url https://github.com/interscript/rababa/
+  description {    Arabic diacritization is useful for several practical business cases
+    like text to speech or Romanization of Arabic texts or scripts.
+
+    This map in particular uses the RABABA library to automatically detect
+    and add diacritics using machine learning.
+  }
+}
+
+tests {
+   'قطر'  -> 'قِطْرَ'
+   'abc' ->  'abc'
+   '‘Iz. Ibrāhīm as-Sa‘danī' ->  '‘Iz. Ibrāhīm as-Sa‘danī'
+}
+
+stage main {
+  rababa config: "200"
+}
+}
+'''
+
+_ROYIN_THA_MAP = '''system "ROYIN:tha-Thai:Latn:1999" {
+
+metadata {
+  authority_id royin
+  id 1999
+  language iso-639-2:tha
+  source_script Thai
+  destination_script Latn
+  name Royal Thai General System of Transcription (1999) — phoneme-to-RTGS stage
+  url http://www.royin.go.th/wp-content/uploads/royin-ebook/276/FileUpload/758_6484.pdf
+  creation_date 1999
+  adoption_date 2002
+  description
+
+  notes {
+    "This is the PHONEME-to-RTGS tail stage of the Thai composite: it consumes a syllable-dotted phonemic reading (the output of a trained Thai reading layer, e.g. sequitur/ByT5 over the pythainlp thai-g2p corpus or the tha-phonemic lexicon) and renders the Royal Thai General System of Transcription.
+
+    Historical: the v1 maps corpus carried this mapping as the post-rules of a seq2seq-dependent map (transcription: sequitur.pythainlp_lexicon); revived here as a standalone stage for the B6 composite (WO67).
+
+    Tones (˨˩˦˧˥) and the syllable separator (.) are not romanized (the RTGS drops tone; the separator marks syllable bounds)."
+  }
+}
+
+tests {
+   "k a ˨˩ . k aː ˧" ->  "kaka"
+   "k o ˨˩ . h a n ˩˩˦" ->  "kohan"
+   "k o k̚ ˨˩ . t͡ɕʰ aː ŋ ˦˥" ->  "kokchang"
+   "r a ˦˥ . d u ŋ ˧" ->  "radung"
+}
+
+
+stage main {
+
+  # RTGS POST-RULES (revived from maps-staging/royin-tha-Thai-Latn-1999,
+  # the seq2seq composite tail; the phoneme inventory is the pythainlp
+  # thai-g2p / royalin one)
+  parallel {
+    sub "t͡ɕʰ" "ch"
+    sub "t͡ɕ" "ch"
+    sub "ʰ" "h"
+    sub "ŋ" "ng"
+    sub "j" "i"
+    sub "w" "w"
+    sub "ɔ" "o"
+    sub "ɤ" "oe"
+    sub "ɛ" "ae"
+    sub "ɯ" "ue"
+    sub "ʔ" ""
+    sub "̚" ""
+    sub "ː" ""
+    sub "˨" ""
+    sub "˩" ""
+    sub "˦" ""
+    sub "˧" ""
+    sub "˥" ""
+    sub "." ""
+    sub " " ""
+  }
+}
+}
+'''
+
+
+# -- interscript-py#44: malformed \u escapes name the error --
+
+
+def test_malformed_escape_issue_repro_raises_named():
+    """The issue's 90-byte repro: the braced form `\\u{1F600}` is not a
+    grammar escape (esc_uni4 wants exactly 4 hex). Pre-fix this leaked a
+    raw ValueError from int()."""
+    src = (
+        'system "T:fz-em6:1" {\n'
+        "  stage main {\n"
+        "    sequence {\n"
+        '      sub "\\u{1F600}" "X"\n'
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    with pytest.raises(IscParseError):
+        isc_to_tree(src, "escape.isc")
+
+
+def test_malformed_escape_matrix():
+    """Every malformed lowercase \\u form is an IscParseError with
+    position info; note text is scanned too (the issue's note-text
+    finding); valid escapes still decode."""
+    def expect_named_error(src: str) -> None:
+        with pytest.raises(IscParseError) as excinfo:
+            _parse_only(src)
+        # Position pointer present (the IscParseError renders line:col).
+        assert re.search(r"line \d+:\d+: ", str(excinfo.value))
+
+    system = 'system "x" { stage main { sub %s "X" } }'
+    # short hex (3 digits, then the closing quote)
+    expect_named_error(system % '"\\u00E"')
+    # non-hex head and tail
+    expect_named_error(system % '"\\uZZZZ"')
+    expect_named_error(system % '"\\u12G4"')
+    # braced form
+    expect_named_error(system % '"\\u{1F600}"')
+    # escape cut by end-of-string / end-of-file
+    expect_named_error(system % '"\\u00"')
+    expect_named_error('system "x" { stage main { sub "\\u')
+
+    # note text: the escape scanner runs over free note strings too
+    expect_named_error(
+        'system "x" {\nmetadata {\n  notes {\n    note "\\uZZZZ"\n  }\n}\n}'
+    )
+
+
+def test_valid_escape_still_decodes():
+    """The fix is error-path only: a well-formed \\uXXXX decodes exactly
+    as before."""
+    doc = _parse_only('system "x" { stage main { sub "\\u00E9" "X" } }')
+    rule = doc["stages"][0]["body"][0]["rule"]
+    assert rule["from"] == {"type": "string", "value": "é"}
+
+
+def test_capital_escape_stays_literal_u():
+    """Capital \\U is NOT decoded by this parser: the grammar's esc_u_lone
+    branch renders a literal "U" and the digits stay raw text (the ts
+    hand-parser parity deviation in actions.ts; ruby's artifact parser
+    decodes both spellings — cross-runtime alignment is an owner
+    decision). Malformed \\U therefore never raises; it must also never
+    crash (#44's adjacent shape)."""
+    system = 'system "x" { stage main { sub %s "X" } }'
+    doc = _parse_only(system % '"\\UZZZZ"')
+    rule = doc["stages"][0]["body"][0]["rule"]
+    assert rule["from"] == {"type": "string", "value": "UZZZZ"}
+    doc = _parse_only(system % '"\\U00E"')
+    rule = doc["stages"][0]["body"][0]["rule"]
+    assert rule["from"] == {"type": "string", "value": "U00E"}
