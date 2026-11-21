@@ -19,6 +19,7 @@ Example:
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -62,7 +63,19 @@ _CONSTRAINTS = {"before", "after", "not_before", "not_after"}
 _STDLIB_EXPR = {"alpha", "digit", "word", "not_word", "any_character"}
 # Tokens that terminate an item inside a rule; a bare word equal to one
 # of these is a keyword, never an alias reference.
-_KEYWORDS = _CONSTRAINTS | {"to", "from", "note"}
+_KEYWORDS = _CONSTRAINTS | {"to", "from", "note", "when"}
+# The WF-1 keyword table (grammar keyword = ... in isc.parg / the ruby
+# keyword rule): guard lists and declaration lists stop at any of
+# these instead of swallowing the next construct's head token.
+_WF1_KEYWORDS = {
+    "parallel", "sequence", "stage", "compose", "separate", "system",
+    "metadata", "aliases", "tests", "notes", "description",
+    "any_character", "authority", "dependency", "run", "sub",
+    "before", "after", "not_before", "not_after", "any", "none",
+    "boundary", "line_start", "line_end", "word_boundary", "downcase",
+    "upcase", "title_case", "capture", "maybe", "some", "ref", "name",
+    "ruleset", "use", "override", "languages", "when",
+}
 
 class _IscParser:
     """Recursive-descent ISC parser; one method per construct."""
@@ -100,6 +113,8 @@ class _IscParser:
             "aliases": [],
             "stages": [],
             "dependencies": [],
+            "languages": [],
+            "rulesets": [],
         }
         for item in body:
             if "metadata" in item:
@@ -112,6 +127,10 @@ class _IscParser:
                 doc["stages"].append(item["stage"])
             elif "dependency" in item:
                 doc["dependencies"].append(item["dependency"])
+            elif "languages" in item:
+                doc["languages"].extend(item["languages"])
+            elif "ruleset" in item:
+                doc["rulesets"].append(item["ruleset"])
         return doc
 
     # -- block items --
@@ -133,8 +152,61 @@ class _IscParser:
                 items.append(self._stage())
             elif keyword == "dependency":
                 items.append(self._dependency())
+            elif keyword == "languages":
+                # ISC-WF-1 W3: `languages a, b` — the languages the map
+                # serves, declared once per map alongside metadata (the
+                # reference grammars' languages_decl; identifiers are
+                # keyword-guarded so the repeat stops at the next block
+                # item).
+                items.append(self._languages_decl())
+            elif keyword == "ruleset":
+                # ISC-WF-1 W1: a named, reusable rule set; bodies are
+                # stage bodies (spec §3.1) and never execute directly —
+                # they splice into stages through `use`.
+                items.append(self._ruleset())
             else:
                 self._error(f"Unexpected keyword: {keyword}")
+
+    def _languages_decl(self) -> dict:
+        self._expect("languages")
+        self._skip_ws()
+        languages: list[str] = []
+        while True:
+            word = self._peek_strict_ident()
+            if not word or word in _WF1_KEYWORDS:
+                break
+            self._consume(word)
+            languages.append(word)
+            saved = self._pos
+            self._skip_inline_ws()
+            if self._peek() == ",":
+                # comma_ws: a comma REQUIRES another identifier (the
+                # reference grammar's *(((comma_ws / whitespace) ident))).
+                self._pos += 1
+                self._skip_ws()
+                nxt = self._peek_strict_ident()
+                if not nxt or nxt in _WF1_KEYWORDS:
+                    self._error("Expected language identifier after ','")
+                continue
+            self._skip_ws()
+            nxt = self._peek_strict_ident()
+            if nxt and nxt not in _WF1_KEYWORDS:
+                continue
+            self._pos = saved
+            break
+        if not languages:
+            self._error("Expected language identifier after 'languages'")
+        return {"languages": languages}
+
+    def _ruleset(self) -> dict:
+        self._expect("ruleset")
+        self._skip_ws()
+        name = self._strict_ident()
+        self._skip_ws()
+        self._expect("{")
+        body = self._stage_items()
+        self._expect("}")
+        return {"ruleset": {"name": name, "body": body}}
 
     def _metadata(self) -> dict:
         self._expect("metadata")
@@ -168,16 +240,28 @@ class _IscParser:
                     is_note_list = self._peek_word() == "note"
                     self._pos = saved
                     if is_note_list:
-                        notes = []
-                        while True:
-                            self._skip_ws()
-                            if self._peek() == "}":
-                                break
-                            self._expect("note")
-                            self._skip_ws()
-                            notes.append(self._string_literal())
+                        try:
+                            notes = []
+                            while True:
+                                self._skip_ws()
+                                if self._peek() == "}":
+                                    break
+                                self._expect("note")
+                                self._skip_ws()
+                                notes.append(self._string_literal())
+                            self._expect("}")
+                            metadata["notes"] = notes
+                            continue
+                        except IscParseError:
+                            # The reference grammar's ordered choice: the
+                            # note-line list is tried first; when it fails
+                            # mid-block (prose notes carry unescaped inner
+                            # quotes — din-urd, komaba), the generic-field
+                            # production re-reads the whole block as one
+                            # raw-text value ending at the first `}`.
+                            self._pos = saved
+                        metadata["notes"] = self._raw_text()
                         self._expect("}")
-                        metadata["notes"] = notes
                     else:
                         metadata["notes"] = self._raw_text()
                         self._expect("}")
@@ -261,6 +345,14 @@ class _IscParser:
         name = self._identifier()
         self._skip_ws()
         self._expect("{")
+        body = self._stage_items()
+        self._expect("}")
+        return {"stage": {"name": name, "body": body}}
+
+    def _stage_items(self) -> list[dict]:
+        """Stage/rule-set body: parallel and sequence blocks, run/separate/
+        compose/decompose/string-case directives, funcalls, bare rules and
+        `use` directives (WF-1)."""
         body: list[dict] = []
         while True:
             self._skip_ws()
@@ -279,37 +371,7 @@ class _IscParser:
                 self._consume(keyword)
                 self._skip_ws()
                 self._expect("{")
-                rules = []
-                while True:
-                    self._skip_ws()
-                    # Same EOF progress invariant as the stage loop.
-                    if self._peek() == "}" or self._pos >= len(self._src):
-                        break
-                    if self._peek() == "#":
-                        self._skip_line()
-                        continue
-                    if self._peek_word() == "sub":
-                        rules.append(self._rule())
-                    elif self._peek_word() == "use":
-                        # Grammar rule_line = rule / use_directive /
-                        # comment_item: `use` is legal in rule position,
-                        # but WF-1 `use`/`ruleset` expansion is not in this
-                        # parser's vocabulary yet — skip as before
-                        # (documented gap; rejecting it here would break
-                        # maps the reference trio accept, a worse
-                        # divergence than the silent drop).
-                        self._skip_line()
-                    else:
-                        # maps#293 (WO20 fuzz): an unrecognized token in
-                        # rule position fails the grammar's rule_line
-                        # production (the parity audit pins the nested
-                        # block probe as rejected 4/4). The old comment
-                        # claimed ruby silently drops these tokens — it
-                        # does not: ruby/ts/rs parse-reject, and py used
-                        # to absorb the stray lines (a nested block's
-                        # rules even leaked into the outer sequence).
-                        keyword = self._peek_word()
-                        self._error(f"Unexpected {keyword!r} in rule position")
+                rules = self._rule_lines()
                 self._expect("}")
                 body.append({"kind": keyword, "rules": rules})
             elif keyword == "run":
@@ -374,11 +436,10 @@ class _IscParser:
             elif keyword == "sub":
                 body.append({"kind": "bare_rule", "rule": self._rule()})
             elif keyword == "use":
-                # Stage-item position `use` (grammar stage_item): legal,
-                # but WF-1 `use`/`ruleset` expansion is not in this
-                # parser's vocabulary yet — skip as before (documented
-                # gap; see the rule-position note above).
-                self._skip_line()
+                # ISC-WF-1 W1/W2: `use <ident>` (same-map ruleset) or
+                # `use <alias>.<ident>` (dependency-declared), with an
+                # optional override block; expanded at conversion time.
+                body.append(self._use_directive())
             else:
                 # maps#293 (WO20 fuzz): an unrecognized keyword in
                 # stage-item position fails the grammar's stage_item
@@ -386,8 +447,53 @@ class _IscParser:
                 # typo'd or foreign directive parsed to a DIFFERENT rule
                 # set than the reference trio's parse rejection.
                 self._error(f"Unexpected {keyword!r} in stage item position")
-        self._expect("}")
-        return {"stage": {"name": name, "body": body}}
+        return body
+
+    def _rule_lines(self) -> list[dict]:
+        """One parallel/sequence/override block's rule lines: rule defs,
+        `use` directives (§3.2 — the referenced content joins the
+        enclosing pass) and comments; anything else is the strict-parse
+        rejection (maps#293)."""
+        rules: list[dict] = []
+        while True:
+            self._skip_ws()
+            # Same EOF progress invariant as the stage loop.
+            if self._peek() == "}" or self._pos >= len(self._src):
+                break
+            if self._peek() == "#":
+                self._skip_line()
+                continue
+            if self._peek_word() == "sub":
+                rules.append(self._rule())
+            elif self._peek_word() == "use":
+                rules.append(self._use_directive())
+            else:
+                keyword = self._peek_word()
+                self._error(f"Unexpected {keyword!r} in rule position")
+        return rules
+
+    def _use_directive(self) -> dict:
+        self._expect("use")
+        self._skip_ws()
+        alias = self._strict_ident()
+        qualified = None
+        if self._peek() == ".":
+            self._pos += 1
+            qualified = self._strict_ident()
+        overrides = None
+        self._skip_ws()
+        if self._peek_word() == "override":
+            self._consume("override")
+            self._skip_ws()
+            self._expect("{")
+            overrides = self._rule_lines()
+            self._expect("}")
+        item: dict = {"kind": "use", "alias": alias}
+        if qualified is not None:
+            item["qualified"] = qualified
+        if overrides is not None:
+            item["overrides"] = overrides
+        return item
 
     # -- rules --
 
@@ -414,6 +520,10 @@ class _IscParser:
                     self._consume(word)
                     self._skip_ws()
                     rule["constraints"].append({"kind": word, "item": self._item()})
+                elif word == "when":
+                    # ISC-WF-1 W3: a language guard on the rule (the
+                    # guard fires only when that language is selected).
+                    rule["when"] = self._when_guard()
                 else:
                     self._error(f"Unexpected keyword in sub block: {word}")
             self._expect("}")
@@ -430,7 +540,38 @@ class _IscParser:
             self._consume(word)
             self._skip_ws()
             constraints.append({"kind": word, "item": self._item_atom()})
+        if self._peek_word() == "when":
+            rule = {"from": from_item, "to": to_item, "constraints": constraints}
+            rule["when"] = self._when_guard()
+            return rule
         return {"from": from_item, "to": to_item, "constraints": constraints}
+
+    def _when_guard(self) -> list[str]:
+        """`when <ident> (","|ws <ident>)*` — language names are
+        keyword-guarded so the repeat stops at the next rule/block head
+        instead of swallowing it."""
+        self._expect("when")
+        self._skip_ws()
+        languages = [self._strict_ident()]
+        while True:
+            saved = self._pos
+            self._skip_inline_ws()
+            if self._peek() == ",":
+                self._pos += 1
+                self._skip_ws()
+                nxt = self._peek_strict_ident()
+                if not nxt or nxt in _WF1_KEYWORDS:
+                    self._error("Expected language identifier after ','")
+                languages.append(nxt)
+                continue
+            self._skip_ws()
+            nxt = self._peek_strict_ident()
+            if nxt and nxt not in _WF1_KEYWORDS:
+                languages.append(nxt)
+                continue
+            self._pos = saved
+            break
+        return languages
 
     # -- items --
 
@@ -664,6 +805,33 @@ class _IscParser:
         if self._pos == start:
             self._error("Expected identifier")
         return self._src[start : self._pos]
+
+    def _strict_ident(self) -> str:
+        """The reference grammar's identifier: [A-Za-z_][A-Za-z0-9_]* —
+        used by the WF-1 productions (ruleset/use/when/languages names),
+        which are ASCII-strict unlike the legacy reader above."""
+        self._skip_ws()
+        ident = self._peek_strict_ident()
+        if not ident:
+            self._error("Expected identifier")
+        self._pos += len(ident)
+        return ident
+
+    def _peek_strict_ident(self) -> str:
+        start = self._pos
+        if start >= len(self._src):
+            return ""
+        c = self._src[start]
+        if not (c.isascii() and (c.isalpha() or c == "_")):
+            return ""
+        i = start + 1
+        while i < len(self._src):
+            c = self._src[i]
+            if c.isascii() and (c.isalnum() or c == "_"):
+                i += 1
+            else:
+                break
+        return self._src[start:i]
 
     def _number(self) -> int:
         start = self._pos
@@ -971,6 +1139,10 @@ def _stage_tree(
                 "pattern": _render_item(rule["from"], aliases),
                 "result": _render_item(rule["to"], aliases),
             }
+            if rule.get("when"):
+                # ISC-WF-1 W3: the guard rides on the sub; the engine
+                # resolves it per selected language (§5.1/§5.2).
+                sub["when"] = rule["when"]
             for constraint in rule["constraints"]:
                 if constraint["kind"] == "before":
                     sub["before"] = _render_item(constraint["item"], aliases)
@@ -1013,6 +1185,18 @@ def _stage_tree(
         if separator and separator.get("type") == "string":
             sep["separator"] = separator["value"]
         return sep
+    if kind == "funcall":
+        # rababa and friends: the trio load these fine and name the
+        # external dependency at EXECUTION time (ruby: ExternalUtilError
+        # without the Rababa gem). Same contract here — a named
+        # unsupported op at exec, never a load-time rejection.
+        return {
+            "kind": "unsupported",
+            "what": (
+                f"funcall {body_item.get('name')} (external function call; "
+                "the callee is not part of this runtime's vocabulary)"
+            ),
+        }
     raise UnsupportedConstruct(f"stage item {kind}")
 
 
@@ -1024,12 +1208,21 @@ _LIB_CACHE: dict[str, dict[str, str]] = {}
 _dep_aliases: dict[str, str] = {}
 _DEP_ALIAS_ITEMS: dict[str, dict] = {}
 _imported: dict[str, str] = {}
+# Memoized parsed dependency documents, keyed by resolved path (WF-1
+# ruleset splices and alias resolution share the parse).
+_DEP_DOCS: dict[str, dict] = {}
 
 
 def _is_library_target(target: str) -> bool:
     # Libraries carry no path separators or dots (same heuristic as the
     # library-alias harvester) and resolve through _library_aliases.
     return "/" not in target and "." not in target
+
+
+def _dep_doc_cached(key: str, path) -> dict:
+    if key not in _DEP_DOCS:
+        _DEP_DOCS[key] = _IscParser(Path(path).read_text(encoding="utf-8"), str(path)).parse()
+    return _DEP_DOCS[key]
 
 
 def _dep_items(target: str) -> dict:
@@ -1042,7 +1235,7 @@ def _dep_items(target: str) -> dict:
     path = _find_map(target)
     if path is None:
         raise UnsupportedConstruct(f"dependency map {target!r} not found")
-    doc = _IscParser(Path(path).read_text(encoding="utf-8"), str(path)).parse()
+    doc = _dep_doc_cached(str(path), path)
     items = {a["name"]: a["value"] for a in doc["aliases"]}
     _DEP_ALIAS_ITEMS[target] = items
     return items
@@ -1143,6 +1336,14 @@ def _subst_alias_refs(value: str, resolved: dict[str, str]) -> str:
     return "".join(out)
 
 
+def _rule_from_key(rule: dict) -> str:
+    """Structural key of a rule's from-item — the byte-exact from
+    identity of the W2 override merge (§4.2; ruby from.inspect / ts
+    itemKey analog). Two identically written rules produce identical
+    keys; no normalization."""
+    return json.dumps(rule["from"], sort_keys=True, ensure_ascii=False)
+
+
 def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = "raise") -> dict:
     """Parse .isc source and convert to the engine's tree shape.
 
@@ -1201,6 +1402,151 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
             for name in items:
                 _imported.setdefault(name, d["target"])
 
+    # -- ISC-WF-1 W1/W2: ruleset expansion --------------------------------
+    # `use` is a compile-time macro: the referenced ruleset's expanded
+    # items splice in at the use site (ruby node_adapter expand_use / ts
+    # expand.ts). Owner context = (systemCode, rulesets, dep-aliases) of
+    # the document owning the items being expanded — nested `use` items
+    # resolve against their OWNER, not this document.
+
+    doc_rulesets = {r["name"]: r["body"] for r in doc["rulesets"]}
+
+    def _owner_rulesets(target: str) -> tuple[str, dict, dict]:
+        """The (systemCode, rulesets, dep-aliases) of a dependency doc,
+        resolved through the load paths or the corpus's sibling libs/ dir
+        (the trio's load_path carries both; py CI pins maps/ only)."""
+        from .interscript import _find_map
+
+        path = _find_map(target)
+        if path is None:
+            cand = libs_dir / f"{target}.isc"
+            if cand.is_file():
+                path = cand
+        if path is None:
+            raise UnsupportedConstruct(
+                f"use: cannot resolve dependency {target!r} (needed for its rulesets)"
+            )
+        dep_doc = _dep_doc_cached(str(path), path)
+        dep_rulesets = {r["name"]: r["body"] for r in dep_doc["rulesets"]}
+        dep_dep_aliases = {
+            d["aliasName"]: d["target"] for d in dep_doc["dependencies"] if d.get("aliasName")
+        }
+        return dep_doc["systemCode"], dep_rulesets, dep_dep_aliases
+
+    def expand_items(items: list, chain: list, owner: tuple) -> list:
+        out = []
+        for it in items:
+            kind = it.get("kind") if isinstance(it, dict) else None
+            if kind == "use":
+                out.extend(expand_use(it, chain, owner))
+            elif kind in ("parallel", "sequence"):
+                # §3.2: a `use` row splices the referenced ruleset's rule
+                # content into the enclosing pass (groups flatten).
+                rules = []
+                for r in it["rules"]:
+                    if r.get("kind") == "use":
+                        rules.extend(expand_use_flat(r, chain, owner))
+                    else:
+                        rules.append(r)
+                out.append({**it, "rules": rules})
+            else:
+                out.append(it)
+        return out
+
+    def expand_use(use_item: dict, chain: list, owner: tuple) -> list:
+        syscode, rulesets, owner_deps = owner
+        alias = use_item["alias"]
+        qualified = use_item.get("qualified")
+        if qualified:
+            target = owner_deps.get(alias)
+            if target is None:
+                raise UnsupportedConstruct(
+                    f"use {alias}.{qualified}: no declared dependency aliased {alias!r}"
+                )
+            dep_syscode, dep_rulesets, dep_deps = _owner_rulesets(target)
+            body = dep_rulesets.get(qualified)
+            if body is None:
+                raise UnsupportedConstruct(
+                    f"use {alias}.{qualified}: ruleset not found in dependency {target!r}"
+                )
+            key = f"{dep_syscode}::{qualified}"
+            inner_owner = (dep_syscode, dep_rulesets, dep_deps)
+        else:
+            body = rulesets.get(alias)
+            if body is None:
+                raise UnsupportedConstruct(f"use {alias}: ruleset not found")
+            key = f"{syscode}::{alias}"
+            inner_owner = owner
+        if key in chain:
+            raise UnsupportedConstruct(f"use cycle: {' -> '.join(chain + [key])}")
+        expanded = expand_items(body, chain + [key], inner_owner)
+        overrides = use_item.get("overrides")
+        if overrides:
+            # W2 (§4.2): child rules win on exact from-equality; the
+            # override rows join the expansion's trailing parallel block
+            # when there is one (§4.2.5), else trail as bare rules.
+            o_rows: list[dict] = []
+            for r in overrides:
+                if r.get("kind") == "use":
+                    o_rows.extend(expand_use_flat(r, chain, inner_owner))
+                else:
+                    o_rows.append(r)
+            o_keys = {_rule_from_key(r) for r in o_rows}
+            kept = []
+            for it in expanded:
+                it_kind = it.get("kind")
+                if it_kind == "bare_rule":
+                    if _rule_from_key(it["rule"]) not in o_keys:
+                        kept.append(it)
+                elif it_kind in ("parallel", "sequence"):
+                    kept.append(
+                        {**it, "rules": [r for r in it["rules"] if _rule_from_key(r) not in o_keys]}
+                    )
+                else:
+                    kept.append(it)
+            tail = kept[-1] if kept else None
+            if tail is not None and tail.get("kind") == "parallel":
+                kept[-1] = {**tail, "rules": tail["rules"] + o_rows}
+            else:
+                kept.extend({"kind": "bare_rule", "rule": r} for r in o_rows)
+            expanded = kept
+        return expanded
+
+    def expand_use_flat(use_item: dict, chain: list, owner: tuple) -> list:
+        rules = flatten_rules(expand_use(use_item, chain, owner))
+        overrides = use_item.get("overrides")
+        if not overrides:
+            return rules
+        o_rows = []
+        for r in overrides:
+            if r.get("kind") == "use":
+                o_rows.extend(expand_use_flat(r, chain, owner))
+            else:
+                o_rows.append(r)
+        o_keys = {_rule_from_key(r) for r in o_rows}
+        # §4.3 flat merge: matching rules drop wherever they sit, the
+        # override rows land at the tail; the caller re-wraps the list
+        # into the enclosing block's structure.
+        return [r for r in rules if _rule_from_key(r) not in o_keys] + o_rows
+
+    def flatten_rules(items: list) -> list:
+        rules = []
+        for it in items:
+            kind = it.get("kind")
+            if kind in ("parallel", "sequence"):
+                rules.extend(it["rules"])
+            elif kind == "bare_rule":
+                rules.append(it["rule"])
+            else:
+                raise UnsupportedConstruct(
+                    "use inside a parallel/sequence block: the referenced ruleset "
+                    "carries non-rule items that cannot join the pass"
+                )
+        return rules
+
+    main_owner = (doc["systemCode"], doc_rulesets, dep_aliases)
+    expanded_bodies: dict[str, list] = {}
+
     def _subst(rule: dict) -> dict:
         try:
             pattern = _guarded_regex(rule, regex_aliases, aliases)
@@ -1221,17 +1567,23 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
         if to.get("type") == "function" and to.get("name") in _FUNCTIONS:
             # `to upcase` and friends: the replacement is the match
             # itself, passed through the casing function.
-            return {
+            op = {
                 "kind": "subst",
                 "pattern": pattern,
                 "result": "",
                 "case": to["name"],
             }
-        return {
+            if rule.get("when"):
+                op["when"] = rule["when"]
+            return op
+        op = {
             "kind": "subst",
             "pattern": pattern,
             "result": _repl_of(to, regex_aliases),
         }
+        if rule.get("when"):
+            op["when"] = rule["when"]
+        return op
 
     def _maybe(rule: dict, rules: list[dict]) -> None:
         """Append a rendered rule, honoring on_unsupported."""
@@ -1257,8 +1609,12 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
         if name in visiting:
             raise UnsupportedConstruct(f"cyclic run stage.{name}")
         visiting.add(name)
+        if name not in expanded_bodies:
+            expanded_bodies[name] = expand_items(
+                stages_by_name[name]["body"], [], main_owner
+            )
         rules: list[dict] = []
-        for body_item in stages_by_name[name]["body"]:
+        for body_item in expanded_bodies[name]:
             kind = body_item["kind"]
             if kind == "sequence":
                 for rule in body_item["rules"]:
@@ -1318,7 +1674,7 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
         for name in stages_by_name
     ]
 
-    return {
+    tree = {
         "metadata": doc["metadata"],
         # The engine's test consumers expect (input, expected) pairs.
         "tests": [(t["input"], t["expected"]) for t in doc["tests"]],
@@ -1326,6 +1682,12 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
         "dependencies": [d["target"] for d in doc["dependencies"]],
         "skipped_unsupported": skipped,
     }
+    if doc["languages"]:
+        # ISC-WF-1 W3: the map's declared languages; the engine consults
+        # them when a transliteration selects one (ruby: LanguagesDecl /
+        # select_language — an undeclared selection is inert).
+        tree["languages"] = doc["languages"]
+    return tree
 
 
 def _stage_item(body_item: dict, dep_aliases: dict[str, str], aliases: dict[str, str]) -> dict:

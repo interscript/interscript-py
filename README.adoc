@@ -47,7 +47,9 @@ interscript.transliterate("un-bul-Cyrl-Latn-1977", "нос Бяга БЯГА")
 - `map_exist(name)` — check whether a map is available
 - `map_list()` — list all discoverable map names
 - `load_map(name)` — parse and cache a map (returns an `Engine`)
-- `transliterate(name, text)` — apply a map to text
+- `transliterate(name, text)` — apply a map to text; `language:` selects
+one of the map's declared `languages`, activating the matching
+`when`-guarded rules (inert without a declared selection)
 
 == Measured coverage (2026-08-20)
 

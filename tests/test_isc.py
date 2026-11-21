@@ -491,10 +491,16 @@ def test_malformed_escape_matrix():
     expect_named_error(system % '"\\u00"')
     expect_named_error('system "x" { stage main { sub "\\u')
 
-    # note text: the escape scanner runs over free note strings too
-    expect_named_error(
+    # note text: the escape scanner runs over free note strings too —
+    # BUT the reference grammar's ordered choice gives the notes block a
+    # raw-text fallback (the note-line production fails on the malformed
+    # string, the generic-field production re-reads the whole block as
+    # prose; ruby: metadata notes = Slice 'note "\uZZZZ"\n  '). Only
+    # RULE strings reject malformed escapes.
+    doc = _parse_only(
         'system "x" {\nmetadata {\n  notes {\n    note "\\uZZZZ"\n  }\n}\n}'
     )
+    assert doc["metadata"]["notes"] == 'note "\\uZZZZ"'
 
 
 def test_valid_escape_still_decodes():
