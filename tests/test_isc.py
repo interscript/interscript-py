@@ -11,13 +11,13 @@ import pytest
 from interscript.isc import IscParseError, UnsupportedConstruct, isc_to_tree
 
 
-SAMPLE = '''
+SAMPLE = r'''
 system "test-map-Cyrl-Latn-2000" {
 
 metadata {
   name "Test Map"
   description {
-    A description with { nested } braces.
+    A description with \{ nested \} braces.
   }
 }
 
@@ -519,3 +519,240 @@ def test_capital_escape_stays_literal_u():
     doc = _parse_only(system % '"\\U00E"')
     rule = doc["stages"][0]["body"][0]["rule"]
     assert rule["from"] == {"type": "string", "value": "U00E"}
+
+
+# --- maps#293 (WO20 fuzz): the parse accept/reject boundary must match
+# --- the reference trio (ruby/ts/rs parse the vendored isc.parg grammar).
+# --- Each family below is one grammar-strictness class, not a case fix.
+
+
+def test_nested_block_inside_sequence_rejected():
+    """A block keyword in rule position is a parse error. Grammar:
+    rule_line = rule / use_directive / comment_item — sequence/parallel
+    do not re-enter. The parity audit pins this as a negative probe
+    rejected 4/4; py used to absorb the nested block's rules into the
+    outer sequence (silently different rule set)."""
+    src = '''
+system "T:fz-em7:1" {
+  stage main {
+    sequence {
+      sub "a" "b"
+      parallel {
+        sub "c" "d"
+      }
+    }
+  }
+}
+'''
+    with pytest.raises(IscParseError):
+        isc_to_tree(src)
+
+
+def test_unknown_keyword_in_stage_position_rejected():
+    """An unrecognized keyword in stage-item position is a parse error
+    (grammar stage_item); py used to silently drop the line."""
+    src = '''
+system "T:fz-ukw:1" {
+  stage main {
+    sequence {
+      sub "a" "b"
+      frobnicate "c" "d"
+    }
+  }
+}
+'''
+    with pytest.raises(IscParseError):
+        isc_to_tree(src)
+
+
+def test_unknown_directive_in_stage_position_rejected():
+    """Same class, block-less form: an unknown top-of-stage keyword."""
+    src = '''
+system "T:fz-ukw2:1" {
+  stage main {
+    frobnicate "a" "b"
+  }
+}
+'''
+    with pytest.raises(IscParseError):
+        isc_to_tree(src)
+
+
+def test_malformed_simple_escape_rejected():
+    """The grammar's escape set is n r t " \\ uXXXX (plus the \\U forms);
+    any other letter after the backslash fails the string production.
+    py used to pass unknown escapes through as the bare letter."""
+    with pytest.raises(IscParseError):
+        isc_to_tree('system "x" { stage main { sub "a\\q" "b" } }')
+    with pytest.raises(IscParseError):
+        isc_to_tree('system "x" { stage main { sub "a\\z" "b" } }')
+
+
+def test_valid_simple_escapes_still_decode():
+    """The rejection is error-path only: the named escapes decode."""
+    doc = _parse_only('system "x" { stage main { sub "a\\n\\t\\r\\"\\\\" "b" } }')
+    rule = doc["stages"][0]["body"][0]["rule"]
+    assert rule["from"] == {"type": "string", "value": 'a\n\t\r"\\'}
+
+
+def test_ruleset_inside_metadata_rejected():
+    """metadata_field has no ruleset production; the trio reject. py's
+    generic-field fallback used to swallow the line (braces included)
+    as a string value."""
+    src = '''
+system "T:fz-rim:1" {
+  metadata {
+    authority_id fz
+    name "ruleset inside metadata"
+    ruleset inner { sub "a" "b" }
+  }
+  stage main {
+    sequence {
+      sub "a" "b"
+    }
+  }
+}
+'''
+    with pytest.raises(IscParseError):
+        isc_to_tree(src)
+
+
+def test_zero_width_primitive_in_compound_from_parses_then_names_at_exec():
+    """A zero-width primitive inside a compound from is a GRAMMAR-legal
+    document: the trio parse it and name the primitive at execution
+    (ruby/ts 'Alias word_boundary not found', rs 'unknown primitive').
+    py used to reject at conversion — the failure moves to the engine,
+    named, under the existing unsupported-op path."""
+    from interscript.engine import Engine, ExecutionError
+
+    src = '''
+system "FZ:grammar:350509" {
+  stage main {
+    sequence {
+      sub {
+        from word_boundary + capture(some("z")) + word_boundary
+        to "W" + ref(1)
+        not_before "j"
+        not_after "k"
+      }
+    }
+  }
+}
+'''
+    tree = isc_to_tree(src)  # parse leg: ACCEPTS
+    engine = Engine(tree)
+    with pytest.raises(ExecutionError, match="word_boundary"):
+        engine.transliterate("zz")  # exec leg: named error
+
+
+# --- maps#295 (WO20 fuzz): metadata free-text scanning must be inert.
+
+
+def test_note_text_brace_is_inert():
+    """A bare '{' inside description free text is ORDINARY TEXT (grammar
+    raw_text = *( "\\"{" / "\\"}" / (!"}" chr) ) — no brace-depth
+    tracking). Brace-depth tracking made one '{' swallow the rest of the
+    document (notes, tests, the stage block) into a metadata string, so
+    the parsed rule set — and the transliteration output — silently
+    changed with a one-character prose edit."""
+    clean = '''
+system "DIN:kaa-Cyrl:Latn:1460-2-2011" {
+  metadata {
+    name "DIN 1460-2:2011-10, Tabelle 1 row 22"
+    description {
+      Romanization of Cyrillic alphabets; extracted from the
+      standard's text layer.
+    }
+    notes {
+      note "Extraction provenance: the PDF text layer."
+    }
+  }
+  tests {
+     "a" ->  "a"
+     "b" ->  "c"
+  }
+  stage main {
+    parallel {
+      sub "a" "a"
+      sub "b" "c"
+    }
+  }
+}
+'''
+    # one character inside the description prose flips: standard's -> standa{d's
+    mutated = clean.replace("standard's", "standa{d's")
+    clean_tree = isc_to_tree(clean)
+    mutated_tree = isc_to_tree(mutated)
+    assert [s["name"] for s in clean_tree["stages"]] == ["main"]
+    assert clean_tree["stages"] == mutated_tree["stages"]
+
+    from interscript.engine import Engine
+
+    assert Engine(clean_tree).transliterate("ab") == "ac"
+    assert Engine(mutated_tree).transliterate("ab") == "ac"
+
+
+# --- maps#294 (WO20 fuzz): the self-run repro joins the mutual-cycle
+# --- pin; every runtime names the cycle, none crash.
+
+
+def test_self_run_cycle_raises():
+    src = '''
+system "T:fz-selfrun:1" {
+  stage main {
+    parallel {
+      sub "a" "b"
+    }
+    run stage.main
+  }
+}
+'''
+    with pytest.raises(UnsupportedConstruct, match="cyclic"):
+        isc_to_tree(src)
+
+
+def test_content_after_system_block_rejected():
+    """The reference grammars anchor isc_source at end-of-input: content
+    after the system block is a parse error. Without the anchor, a
+    mis-scoped metadata block closed the system early and the trailing
+    tests/stages silently vanished from the parsed tree (the trio parse
+    the same document to a parse error)."""
+    src = '''
+system "T:fz-tail:1" {
+  metadata {
+    description {
+      A description with { nested } braces.
+    }
+  }
+  stage main {
+    parallel {
+      sub "a" "b"
+    }
+  }
+}
+'''
+    with pytest.raises(IscParseError):
+        isc_to_tree(src)
+
+
+def test_escaped_braces_in_description_decode():
+    """The legal spelling for prose braces: \\{ and \\} decode to literal
+    braces inside description free text (grammar raw_text escape
+    branches); the document parses and the stage survives."""
+    src = '''
+system "T:fz-esc:1" {
+  metadata {
+    description {
+      Braces \\{ escaped \\} in prose.
+    }
+  }
+  stage main {
+    parallel {
+      sub "a" "b"
+    }
+  }
+}
+'''
+    tree = isc_to_tree(src)
+    assert tree["metadata"]["description"] == "Braces { escaped } in prose."
+    assert [s["name"] for s in tree["stages"]] == ["main"]
