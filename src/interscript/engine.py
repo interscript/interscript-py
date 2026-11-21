@@ -92,9 +92,14 @@ class Engine:
         self._loader = loader
         self.on_unsupported = on_unsupported
         self.skipped_unsupported: list[str] = []
-        self._compiled: re.Pattern[str] | None = None
-        self._group_results: dict[str, str] = {}
-        self._compiled_source: int | None = None
+        # Compiled-op caches, keyed by id(op): op dicts are owned by
+        # self.tree, which is never mutated after construction, so ids
+        # are stable and unique for the Engine's lifetime. The former
+        # single-slot cache recompiled on every call for any map with
+        # more than one parallel op (slot thrash) and subst patterns
+        # were recompiled on every call.
+        self._parallel_cache: dict[int, tuple[re.Pattern[str], dict[str, str]]] = {}
+        self._subst_cache: dict[int, re.Pattern[str]] = {}
 
     def transliterate(self, text: str) -> str:
         for stage in self.tree.get("stages", []):
@@ -109,15 +114,18 @@ class Engine:
     def _run_op(self, op: dict, text: str) -> str:
         kind = op.get("kind")
         if kind == "parallel":
-            if self._compiled is None or self._compiled_source != id(op):
-                pattern, results = _compile_parallel(op["subs"])
-                self._compiled = pattern
-                self._group_results = results
-                self._compiled_source = id(op)
-            return self._compiled.sub(lambda m: self._group_results[m.lastgroup], text)
+            entry = self._parallel_cache.get(id(op))
+            if entry is None:
+                entry = _compile_parallel(op["subs"])
+                self._parallel_cache[id(op)] = entry
+            pattern, results = entry
+            return pattern.sub(lambda m, results=results: results[m.lastgroup], text)
         if kind == "subst":
             flags = re.IGNORECASE if op.get("ignore_case") else 0
-            pattern = re.compile(op["pattern"], flags)
+            pattern = self._subst_cache.get(id(op))
+            if pattern is None:
+                pattern = re.compile(op["pattern"], flags)
+                self._subst_cache[id(op)] = pattern
             case = op.get("case")
             if case:
                 fn = _CASE_FNS[case]
