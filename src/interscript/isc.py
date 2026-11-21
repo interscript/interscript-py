@@ -84,6 +84,14 @@ class _IscParser:
         body = self._block_items()
         self._skip_ws()
         self._expect("}")
+        # maps#293 (WO20 fuzz): the reference grammars anchor isc_source
+        # at end-of-input — any content after the system block is a
+        # parse error. Without this, a mis-scoped block closed the
+        # system early and the rest of the document (tests, stages) was
+        # silently dropped from the parsed tree.
+        self._skip_ws()
+        if self._pos < len(self._src):
+            self._error("Unexpected content after the system block")
 
         doc: dict = {
             "systemCode": system_code,
@@ -188,7 +196,14 @@ class _IscParser:
             elif self._peek() == '"':
                 metadata[key] = self._string_literal()
             else:
-                metadata[key] = self._to_newline().strip()
+                # maps#293 (WO20 fuzz): grammar field_raw =
+                # 1*(!newline !"}" !"{" chr) — a generic field's bare
+                # value cannot contain braces, and a "{" in value
+                # position stays unconsumed so the block grammar rejects
+                # (e.g. a ruleset nested inside metadata — the reference
+                # trio parse-reject it). py used to swallow the whole
+                # line, braces included, as a string value.
+                metadata[key] = self._field_raw_value()
         self._expect("}")
         return {"metadata": metadata}
 
@@ -275,10 +290,26 @@ class _IscParser:
                         continue
                     if self._peek_word() == "sub":
                         rules.append(self._rule())
-                    else:
-                        # Ruby Parslet silently drops unrecognized tokens
-                        # inside rule blocks; parity.
+                    elif self._peek_word() == "use":
+                        # Grammar rule_line = rule / use_directive /
+                        # comment_item: `use` is legal in rule position,
+                        # but WF-1 `use`/`ruleset` expansion is not in this
+                        # parser's vocabulary yet — skip as before
+                        # (documented gap; rejecting it here would break
+                        # maps the reference trio accept, a worse
+                        # divergence than the silent drop).
                         self._skip_line()
+                    else:
+                        # maps#293 (WO20 fuzz): an unrecognized token in
+                        # rule position fails the grammar's rule_line
+                        # production (the parity audit pins the nested
+                        # block probe as rejected 4/4). The old comment
+                        # claimed ruby silently drops these tokens — it
+                        # does not: ruby/ts/rs parse-reject, and py used
+                        # to absorb the stray lines (a nested block's
+                        # rules even leaked into the outer sequence).
+                        keyword = self._peek_word()
+                        self._error(f"Unexpected {keyword!r} in rule position")
                 self._expect("}")
                 body.append({"kind": keyword, "rules": rules})
             elif keyword == "run":
@@ -342,9 +373,19 @@ class _IscParser:
                 body.append(item)
             elif keyword == "sub":
                 body.append({"kind": "bare_rule", "rule": self._rule()})
-            else:
-                # Ruby Parslet parity: drop unrecognized tokens.
+            elif keyword == "use":
+                # Stage-item position `use` (grammar stage_item): legal,
+                # but WF-1 `use`/`ruleset` expansion is not in this
+                # parser's vocabulary yet — skip as before (documented
+                # gap; see the rule-position note above).
                 self._skip_line()
+            else:
+                # maps#293 (WO20 fuzz): an unrecognized keyword in
+                # stage-item position fails the grammar's stage_item
+                # production. py used to silently drop the line, so a
+                # typo'd or foreign directive parsed to a DIFFERENT rule
+                # set than the reference trio's parse rejection.
+                self._error(f"Unexpected {keyword!r} in stage item position")
         self._expect("}")
         return {"stage": {"name": name, "body": body}}
 
@@ -541,8 +582,24 @@ class _IscParser:
                 self._pos += 1
                 if nxt == "u":
                     result += self._unicode_escape()
+                elif nxt in {"n", "t", "r", '"', "\\"}:
+                    result += {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}[nxt]
+                elif nxt == "U":
+                    # esc_u_lone/esc_uni: the capital form is deliberately
+                    # NOT decoded here (see _unicode_escape) — a literal
+                    # "U"; the digits stay raw text.
+                    result += "U"
                 else:
-                    result += {"n": "\n", "t": "\t", "r": "\r"}.get(nxt, nxt)
+                    # maps#293 (WO20 fuzz): the grammar's escape_sequence
+                    # admits only n r t double-quote backslash uXXXX and
+                    # the \U forms — anything else fails the string
+                    # production (ruby: "expected one of ['n','r','t','\"',
+                    # '\\','u'...]"). py used to pass the letter through,
+                    # accepting malformed rule strings the trio reject.
+                    self._error(
+                        f"Invalid escape \\{nxt}: expected one of n, r, t, quote, backslash, u, U",
+                        self._pos - 2,
+                    )
             else:
                 result += c
         self._error("Unterminated string")
@@ -579,20 +636,22 @@ class _IscParser:
         return result
 
     def _raw_text(self) -> str:
+        # maps#295 (WO20 fuzz): free text runs to the FIRST unescaped "}"
+        # — grammar raw_text = *( %x5C "{" / %x5C "}" / (!"}" chr) ), the
+        # exact scan the reference trio perform. A bare "{" in prose is
+        # ORDINARY TEXT: brace-depth tracking made a single "{" inside a
+        # description swallow the rest of the document (notes, tests, the
+        # stage block) into a metadata string, so a one-character prose
+        # edit silently changed the parsed rule set and the output.
         result = ""
-        depth = 0
         while self._pos < len(self._src):
             c = self._src[self._pos]
             if c == "\\" and self._pos + 1 < len(self._src) and self._src[self._pos + 1] in "{}":
                 result += self._src[self._pos + 1]
                 self._pos += 2
                 continue
-            if c == "}" and depth == 0:
+            if c == "}":
                 break
-            if c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
             result += c
             self._pos += 1
         return result.strip()
@@ -617,6 +676,18 @@ class _IscParser:
         while self._pos < len(self._src) and self._src[self._pos] != "\n":
             self._pos += 1
         return self._src[start : self._pos]
+
+    def _field_raw_value(self) -> str:
+        """Grammar field_raw = 1*(!newline !"}" !"{" chr): a generic
+        metadata field's bare value ends at the newline and cannot
+        contain braces. Braces stay unconsumed so the block grammar
+        names the failure (maps#293)."""
+        start = self._pos
+        while self._pos < len(self._src) and self._src[self._pos] not in "{}\n":
+            self._pos += 1
+        if self._pos == start:
+            self._error("Expected field value")
+        return self._src[start : self._pos].strip()
 
     # -- helpers --
 
@@ -1131,7 +1202,21 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
                 _imported.setdefault(name, d["target"])
 
     def _subst(rule: dict) -> dict:
-        pattern = _guarded_regex(rule, regex_aliases, aliases)
+        try:
+            pattern = _guarded_regex(rule, regex_aliases, aliases)
+        except UnsupportedConstruct as e:
+            # maps#293 (WO20 fuzz): a zero-width primitive inside a
+            # compound from (word_boundary + capture(some("z")) +
+            # word_boundary) is a GRAMMAR-legal document — the reference
+            # trio parse it and name the primitive at execution ("Alias
+            # word_boundary not found" / "unknown primitive", the logic
+            # bucket). The failure moves to the engine's unsupported-op
+            # path: a named ExecutionError at exec, recorded-and-skipped
+            # under on_unsupported="skip" — never a conversion-time
+            # rejection of a document the trio accept.
+            if str(e).startswith("primitive "):
+                return {"kind": "unsupported", "what": str(e)}
+            raise
         to = rule["to"]
         if to.get("type") == "function" and to.get("name") in _FUNCTIONS:
             # `to upcase` and friends: the replacement is the match
@@ -1191,6 +1276,15 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
                         _maybe(lambda rule=rule: _subst(rule), rules)
                     rules.append({"kind": "parallel", "subs": split.subs})
                     continue
+                except UnsupportedConstruct as e:
+                    # maps#293 (WO20 fuzz): same zero-width deferral as
+                    # _subst, for the parallel-block render path (a
+                    # primitive in any rule's from fails the whole pass
+                    # at execution on the trio too).
+                    if str(e).startswith("primitive "):
+                        op = {"kind": "unsupported", "what": str(e)}
+                    else:
+                        raise
                 if op is None:
                     continue
                 if op.get("kind") == "run_stage":
