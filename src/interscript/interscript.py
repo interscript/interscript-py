@@ -79,12 +79,18 @@ def load_map(map_name: str, on_unsupported: str = "raise") -> Engine:
     return engine
 
 
-def transliterate(id: str, text: str, index_url: str | None = None) -> str:
+def transliterate(
+    id: str, text: str, index_url: str | None = None, language: str | None = None
+) -> str:
     """Unified conversion surface: map ids run the rule engine; model
     ids resolve through the interscript-ml index and run the neural
-    runtime (lazy — requires the interscript[ml] extra)."""
+    runtime (lazy — requires the interscript[ml] extra).
+
+    ``language`` is the ISC-WF-1 W3 selection: a `when`-guarded rule
+    fires only under a language the map declares (spec §5.1); any other
+    selection — like none — leaves every guard inert."""
     if map_exist(id):
-        return load_map(id).transliterate(text)
+        return load_map(id).transliterate(text, language=language)
     try:
         from interscript.ml import Model, PlaneModel
         from interscript.ml.registry import RegistryError, load_index, resolve
