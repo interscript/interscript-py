@@ -196,6 +196,43 @@ def test_use_cycle_and_unknown_ruleset_are_named_load_errors():
         _parse(unknown)
 
 
+def test_duplicate_ruleset_declaration_is_a_named_load_error():
+    """WO18 G7 (py canon): `ruleset a` declared twice is a named load
+    error — keep-first (ruby/ts) and last-wins/merge (rs pre-fix, py
+    0.2.x) silently hide map bugs and make the executed body
+    declaration-order dependent. ruby (MapLogicError), ts (IscLoadError)
+    and rs (MapLogicError) reject; the 0.2.x parser rewrite lost the
+    0.1.0 check. Spec §6 item 4's load-error surface for cycles,
+    extended to duplicate definition (maps docs/parity G7)."""
+    block_use = (
+        'system "x" {\n'
+        "ruleset a {\n"
+        "  sequence { sub \"x\" \"1\" }\n"
+        "}\n"
+        "ruleset a {\n"
+        "  sequence { sub \"z\" \"3\" }\n"
+        "}\n"
+        "stage main {\n"
+        "  sequence { use a }\n"
+        "}\n"
+        "}\n"
+    )
+    stage_use = (
+        'system "x" {\n'
+        "ruleset a {\n"
+        "  parallel { sub \"x\" \"1\" }\n"
+        "}\n"
+        "ruleset a {\n"
+        "  parallel { sub \"z\" \"3\" }\n"
+        "}\n"
+        "stage main { use a }\n"
+        "}\n"
+    )
+    for src in (block_use, stage_use):
+        with pytest.raises(UnsupportedConstruct, match='ruleset "a" declared more than once'):
+            _parse(src)
+
+
 @corpus
 def test_thai_maps_load_and_splice_the_dependency_ruleset():
     """alalc-tha-2011 and bgnpcgn-tha-2002 failed at `parallel` before:

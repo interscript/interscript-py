@@ -1435,6 +1435,20 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
     # the document owning the items being expanded — nested `use` items
     # resolve against their OWNER, not this document.
 
+    # WO18 G7 (py canon): a ruleset declared more than once is a named
+    # load error — keep-first/last-wins silently hides map bugs and
+    # makes the executed body declaration-order dependent (ruby
+    # document_builder raises MapLogicError, ts expand.ts IscLoadError,
+    # rs builder.rs MapLogicError; spec §6 item 4's load-error surface
+    # for cycles, extended to duplicate definition). The 0.2.x parser
+    # rewrite lost the 0.1.0 check — the last def silently won.
+    seen_rulesets: set[str] = set()
+    for r in doc["rulesets"]:
+        if r["name"] in seen_rulesets:
+            raise UnsupportedConstruct(
+                f'ruleset "{r["name"]}" declared more than once in {doc["systemCode"]}'
+            )
+        seen_rulesets.add(r["name"])
     doc_rulesets = {r["name"]: r["body"] for r in doc["rulesets"]}
 
     def _owner_rulesets(target: str) -> tuple[str, dict, dict]:
@@ -1453,6 +1467,15 @@ def isc_to_tree(source: str, filename: str | None = None, on_unsupported: str = 
                 f"use: cannot resolve dependency {target!r} (needed for its rulesets)"
             )
         dep_doc = _dep_doc_cached(str(path), path)
+        # Same G7 check as the loading document: the trio validate every
+        # document they build, dependency docs included.
+        dep_seen: set[str] = set()
+        for r in dep_doc["rulesets"]:
+            if r["name"] in dep_seen:
+                raise UnsupportedConstruct(
+                    f'ruleset "{r["name"]}" declared more than once in {dep_doc["systemCode"]}'
+                )
+            dep_seen.add(r["name"])
         dep_rulesets = {r["name"]: r["body"] for r in dep_doc["rulesets"]}
         dep_dep_aliases = {
             d["aliasName"]: d["target"] for d in dep_doc["dependencies"] if d.get("aliasName")
