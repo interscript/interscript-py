@@ -511,20 +511,42 @@ def test_valid_escape_still_decodes():
     assert rule["from"] == {"type": "string", "value": "é"}
 
 
-def test_capital_escape_stays_literal_u():
-    """Capital \\U is NOT decoded by this parser: the grammar's esc_u_lone
-    branch renders a literal "U" and the digits stay raw text (the ts
-    hand-parser parity deviation in actions.ts; ruby's artifact parser
-    decodes both spellings — cross-runtime alignment is an owner
-    decision). Malformed \\U therefore never raises; it must also never
-    crash (#44's adjacent shape)."""
+def test_capital_escape_decodes_and_falls_back():
+    """Capital \\U follows the grammar's ordered alternatives: esc_uni
+    decodes 4..8 hex digits (greedy) to one code point; with fewer than
+    4 hex digits esc_u_lone renders a literal "U" and the digits stay
+    raw text. Both spellings decode — the WO19 G6 ruling (ruby/rs
+    always decoded; ts since the gki-bel "\\U040E" fix).
+
+    The capital form was previously rendered as a bare "U" with the
+    digits as raw text (a stale 0.1.x ts hand-parser parity note), so
+    the three Belarusian uppercase-Ў rows (gki-bel-2000 / mvd-bel-2008
+    / odni-bel-2015, `sub "\\U040E" "W"-style`) never fired and
+    diverged from the rs golden corpus.
+
+    Edge shapes are ruby-measured (4/4 with this parser):
+    "\\U00000041" → "A"; "\\U000000410" → "A0" (first 8 hex consumed,
+    the 9th stays raw); "\\U00e9" → "é"; "\\Uab" → "Uab". Malformed
+    capital forms never raise (#44's adjacent shape).
+    """
     system = 'system "x" { stage main { sub %s "X" } }'
-    doc = _parse_only(system % '"\\UZZZZ"')
-    rule = doc["stages"][0]["body"][0]["rule"]
-    assert rule["from"] == {"type": "string", "value": "UZZZZ"}
-    doc = _parse_only(system % '"\\U00E"')
-    rule = doc["stages"][0]["body"][0]["rule"]
-    assert rule["from"] == {"type": "string", "value": "U00E"}
+
+    def from_value(literal):
+        doc = _parse_only(system % literal)
+        return doc["stages"][0]["body"][0]["rule"]["from"]["value"]
+
+    # esc_uni: 4..8 hex digits decode, both hex casings
+    assert from_value('"\\U040E"') == "Ў"
+    assert from_value('"\\U045E"') == "ў"
+    assert from_value('"\\U00e9"') == "é"
+    assert from_value('"\\U00000041"') == "A"
+    # greedy 8-hex cap: a 9th hex digit stays raw text
+    assert from_value('"\\U000000410"') == "A0"
+    # esc_u_lone fallback: fewer than 4 hex digits — literal "U",
+    # digits raw, and never a raise
+    assert from_value('"\\Uab"') == "Uab"
+    assert from_value('"\\U00E"') == "U00E"
+    assert from_value('"\\UZZZZ"') == "UZZZZ"
 
 
 # --- maps#293 (WO20 fuzz): the parse accept/reject boundary must match

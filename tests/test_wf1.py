@@ -339,23 +339,17 @@ corpus_and_golden = pytest.mark.skipif(
 @corpus_and_golden
 def test_golden_corpus_replay():
     """tests/golden/isc-wf0.jsonl (the rs golden corpus, 16,322 rows over
-    453 maps) replays byte-identically.
+    453 maps) replays byte-identically, with no exclusions.
 
-    KNOWN PRE-EXISTING EXCLUSION (execution-level, NOT a parse gap):
-    the three Belarusian maps' uppercase-Ў rows — ruby derives the
-    uppercase rule from the `sub "ў" "ŭ"`-style row, py does not fire it
-    (3 rows across gki-bel-2000 / mvd-bel-2008 / odni-bel-2015; the maps
-    load on both sides and already diverged before this fix). Tracked
-    outside #47.
+    The former exclusion (all rows of gki-bel-2000 / mvd-bel-2008 /
+    odni-bel-2015) is gone: the capital-``\\U`` escape now decodes
+    4..8 hex digits (esc_uni, the WO19 G6 ruling both spellings
+    decode), so the three maps' uppercase-Ў rules fire and the corpus
+    converges 16,322/16,322.
     """
     import interscript
 
     interscript.add_load_path(str(LIBS))
-    excluded = {
-        "gki-bel-Cyrl-Latn-2000",
-        "mvd-bel-Cyrl-Latn-2008",
-        "odni-bel-Cyrl-Latn-2015",
-    }
     rows = [
         json.loads(line)
         for line in GOLDEN.read_text(encoding="utf-8").splitlines()
@@ -364,8 +358,6 @@ def test_golden_corpus_replay():
     engines: dict[str, Engine] = {}
     mismatches = []
     for row in rows:
-        if row["map"] in excluded:
-            continue
         engine = engines.get(row["map"])
         if engine is None:
             engines[row["map"]] = engine = interscript.load_map(row["map"])

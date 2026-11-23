@@ -726,10 +726,7 @@ class _IscParser:
                 elif nxt in {"n", "t", "r", '"', "\\"}:
                     result += {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}[nxt]
                 elif nxt == "U":
-                    # esc_u_lone/esc_uni: the capital form is deliberately
-                    # NOT decoded here (see _unicode_escape) — a literal
-                    # "U"; the digits stay raw text.
-                    result += "U"
+                    result += self._capital_unicode_escape()
                 else:
                     # maps#293 (WO20 fuzz): the grammar's escape_sequence
                     # admits only n r t double-quote backslash uXXXX and
@@ -745,6 +742,36 @@ class _IscParser:
                 result += c
         self._error("Unterminated string")
 
+    def _capital_unicode_escape(self) -> str:
+        """Decode ``\\U`` per the grammar's ordered escape alternatives
+        (``grammar/isc.parg``): esc_uni = ``"U" (4*8hexd) as unicode``
+        decodes 4 to 8 hex digits, greedily, to one code point — the
+        WO19 G6 ruling (BOTH spellings decode; ruby/rs always did, ts
+        since the gki-bel ``"\\U040E"`` fix). With fewer than 4 hex
+        digits esc_uni fails and esc_u_lone renders a literal ``"U"``;
+        the digits then stay raw text (measured on ruby 4/4:
+        ``"\\Uab"`` → ``Uab``). The first 8 hex digits are consumed, so
+        a 9th remains raw (``"\\U000000410"`` → ``A0``, ruby-verified).
+
+        The capital form was previously rendered as a bare ``"U"`` with
+        the digits as raw text — a stale 0.1.x ts hand-parser parity
+        note (ts decodes since the G6 fix), which left the three
+        Belarusian uppercase-Ў rows (gki-bel-2000 / mvd-bel-2008 /
+        odni-bel-2015: ``sub "\\U040E" "W"-style`` rules) unfired and
+        diverging from the golden corpus.
+        """
+        start = self._pos
+        digits = self._src[start : start + 8]
+        n = 0
+        while n < len(digits) and digits[n] in "0123456789abcdefABCDEF":
+            n += 1
+        if n < 4:
+            # esc_u_lone: a lone "U"; the raw digits (if any) are
+            # consumed as ordinary text by the main loop.
+            return "U"
+        self._pos = start + n
+        return chr(int(digits[:n], 16))
+
     def _unicode_escape(self) -> str:
         """Decode ``\\uXXXX`` — the grammar's esc_uni4 (exactly 4 hex
         digits, ``grammar/isc.parg``). Any other form (short hex,
@@ -754,11 +781,10 @@ class _IscParser:
         fuzz campaign's largest crash class — it fires on note text too,
         which shares this scanner).
 
-        The capital ``\\U`` form is deliberately NOT decoded by this
-        parser: the grammar's esc_u_lone branch renders it as a literal
-        "U" with the digits as raw text — the same deviation ts carries
-        in its actions.ts (ruby's artifact parser decodes both
-        spellings; aligning the runtimes is an owner decision).
+        Unlike ``\\u`` (esc_uni4, exactly 4 — no later alternative can
+        match a lowercase ``u``, so a short form fails the string
+        production), the capital ``\\U`` falls back to esc_u_lone with
+        fewer than 4 hex digits — see ``_capital_unicode_escape``.
         """
         slash = self._pos - 2  # the backslash, for the error position
         digits = self._src[self._pos : self._pos + 4]
