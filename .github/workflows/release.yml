@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      contents: write
+      attestations: write
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
@@ -27,3 +29,36 @@ jobs:
         INTERSCRIPT_MAPS_PATH: ${{ github.workspace }}/maps/maps
     - run: python -m build
     - uses: pypa/gh-action-pypi-publish@release/v1
+    # Everything below runs AFTER a successful publish and must never
+    # gate it. Org supply-chain layer (SOTA-2027): every release ships a
+    # CycloneDX 1.6 JSON SBOM + sha256 sidecar (house sidecar pattern)
+    # and build provenance attestations (gh attestation-compatible).
+    # Owner-gated releases: these steps are PREPARED here and run on the
+    # next owner-dispatched release.
+    - name: Emit CycloneDX SBOM (cyclonedx-py over the installed environment)
+      id: sbom
+      run: |
+        pip install cyclonedx-bom
+        version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+        cyclonedx-py environment --sv 1.6 --of json \
+          --pyproject pyproject.toml \
+          -o "interscript-${version}.cdx.json" python3
+        sha256sum "interscript-${version}.cdx.json" \
+          > "interscript-${version}.cdx.json.sha256"
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+        ls -la "interscript-${version}.cdx.json"*
+    - name: Attest build provenance (sdist + wheel + SBOM)
+      continue-on-error: true
+      uses: actions/attest-build-provenance@v4
+      with:
+        subject-path: |
+          dist/interscript-*.tar.gz
+          dist/interscript-*.whl
+          interscript-${{ steps.sbom.outputs.version }}.cdx.json
+    - name: Attach SBOM + sidecar to the GitHub release
+      uses: softprops/action-gh-release@v3
+      with:
+        tag_name: v${{ steps.sbom.outputs.version }}
+        files: |
+          interscript-${{ steps.sbom.outputs.version }}.cdx.json
+          interscript-${{ steps.sbom.outputs.version }}.cdx.json.sha256
