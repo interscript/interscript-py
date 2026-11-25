@@ -140,5 +140,76 @@ class TestPlaneZipRoundTrip(unittest.TestCase):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as z:
             z.writestr("metadata.yaml", "kind: plane\nmembers:\n  plane.onnx: " + "0" * 64 + "\n")
-        with self.assertRaisesRegex(ValueError, "plane.onnx"):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            PlaneModel.from_zip(buf.getvalue())
+
+
+class TestPlaneShipgateLayout(unittest.TestCase):
+    """The int8-dynamic release zips (WO92 shipgate layout) list member
+    hashes under `sha256` and name the graph after its precision
+    (plane-int8dynamic.onnx) — the layout heb-vocalized-plane-3.0
+    ships. The loader must accept it alongside the classic layout,
+    resolving the graph member through the manifest so a precision
+    rename cannot silently skip verification."""
+
+    def _zip_bytes(self, tamper: bool = False) -> bytes:
+        import hashlib
+        import io
+        import json
+        import zipfile
+
+        graph = tiny_plane_graph()
+        classes_json = json.dumps(CLASSES, ensure_ascii=False).encode("utf-8")
+        sha_g = hashlib.sha256(graph).hexdigest()
+        sha_c = hashlib.sha256(classes_json).hexdigest()
+        meta = (
+            f"id: plane-fixture-1.0\nprecision: int8-dynamic\nkind: plane\nk_passes: 2\n"
+            f"sha256:\n  plane-int8dynamic.onnx: {sha_g}\n  classes.json: {sha_c}\n"
+        )
+        stored = bytearray(graph)
+        if tamper:
+            idx = stored.find(b"tiny-plane")
+            stored[idx] ^= 0xFF
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("metadata.yaml", meta)
+            z.writestr("plane-int8dynamic.onnx", bytes(stored))
+            z.writestr("classes.json", classes_json)
+        return buf.getvalue()
+
+    def test_shipgate_layout_loads(self):
+        from interscript.ml.plane import PlaneModel
+
+        m = PlaneModel.from_zip(self._zip_bytes())
+        self.assertEqual(m.k, 2)
+        self.assertEqual(m.translate("كتب"), "كُتُبُ")
+
+    def test_shipgate_tampered_graph_rejected(self):
+        from interscript.ml.plane import PlaneModel
+
+        with self.assertRaisesRegex(ValueError, "sha256"):
+            PlaneModel.from_zip(self._zip_bytes(tamper=True))
+
+    def test_uncovered_onnx_member_rejected(self):
+        import hashlib
+        import io
+        import json
+        import zipfile
+
+        from interscript.ml.plane import PlaneModel
+
+        # graph present in the zip but absent from the hash table must
+        # not load unverified
+        graph = tiny_plane_graph()
+        classes_json = json.dumps(CLASSES, ensure_ascii=False).encode("utf-8")
+        sha_c = hashlib.sha256(classes_json).hexdigest()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr(
+                "metadata.yaml",
+                "kind: plane\nsha256:\n  classes.json: " + sha_c + "\n",
+            )
+            z.writestr("plane-int8dynamic.onnx", graph)
+            z.writestr("classes.json", classes_json)
+        with self.assertRaisesRegex(ValueError, "covered"):
             PlaneModel.from_zip(buf.getvalue())

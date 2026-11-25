@@ -132,8 +132,10 @@ class PlaneModel:
 
 def from_zip(data: bytes) -> PlaneModel:
     """Load a plane artifact zip: metadata.yaml (id, precision, kind,
-    k_passes, classes, member sha256s) + plane.onnx + classes.json.
-    Every member is sha256-verified before the session is created."""
+    k_passes, classes, member sha256s under `members` — or `sha256` on
+    the int8-dynamic shipgate layout) + one manifest-covered graph
+    member (plane.onnx / plane-int8dynamic.onnx) + classes.json. Every
+    member is sha256-verified before the session is created."""
     import hashlib
     import io
     import json as _json
@@ -148,19 +150,27 @@ def from_zip(data: bytes) -> PlaneModel:
     meta = yaml.safe_load(zf.read("metadata.yaml"))
     if meta.get("kind") != "plane":
         raise ValueError(f"plane zip: kind={meta.get('kind')!r}, expected 'plane'")
-    members = meta.get("members") or {}
-    for member in ("plane.onnx", "classes.json"):
-        if member not in names:
-            raise ValueError(f"plane zip: {member} missing")
-        want = members.get(member)
-        got = hashlib.sha256(zf.read(member)).hexdigest()
-        if want is not None and want != got:
-            raise ValueError(f"plane zip: {member} sha256 mismatch ({got})")
-        if want is None:
-            raise ValueError(f"plane zip: {member} has no sha256 in metadata")
+    members = meta.get("members") or meta.get("sha256") or {}
+    if "classes.json" not in names:
+        raise ValueError("plane zip: classes.json missing")
+    if not members.get("classes.json"):
+        raise ValueError("plane zip: classes.json has no sha256 in metadata")
+    # the graph member carries its precision in the file name; resolve
+    # it through the manifest so a rename cannot silently skip
+    # verification
+    graph_member = next((n for n in members if n.endswith(".onnx") and n in names), None)
+    if graph_member is None:
+        raise ValueError("plane zip: no manifest-covered .onnx member")
+    want = members[graph_member]
+    got = hashlib.sha256(zf.read(graph_member)).hexdigest()
+    if want != got:
+        raise ValueError(f"plane zip: {graph_member} sha256 mismatch ({got})")
+    got = hashlib.sha256(zf.read("classes.json")).hexdigest()
+    if members["classes.json"] != got:
+        raise ValueError(f"plane zip: classes.json sha256 mismatch ({got})")
     classes = _json.loads(zf.read("classes.json"))
     return PlaneModel(
-        graph=zf.read("plane.onnx"),
+        graph=zf.read(graph_member),
         classes=classes,
         k_passes=int(meta.get("k_passes", 2)),
     )
